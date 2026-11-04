@@ -1,0 +1,7 @@
+.env
+accounts.json
+admins.json
+silence.wav
+*.tmp
+__pycache__/
+*.session
