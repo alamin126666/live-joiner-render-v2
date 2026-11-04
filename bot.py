@@ -170,6 +170,8 @@ async def get_client(uid: int, phone: str, session_str: str) -> TelegramClient:
 # ═══════════════════════════════════════════════════════════════════════════════
 # UI / KEYBOARDS
 # ═══════════════════════════════════════════════════════════════════════════════
+# Telegram Bot API 9.0+ button color — works on Telegram ≥ Feb 9 2026
+_R = {"style": "danger"}  # "danger" = red  |  "success" = green  |  "primary" = blue
 def access_denied_kb(user_id: int) -> InlineKeyboardMarkup:
     msg_text = (
         f"𝗜 𝗡𝗲𝗲𝗱 𝗩𝗰 𝗝𝗼𝗶𝗻 𝗕𝗼𝘁 𝗔𝗰𝗰𝗲𝘀𝘀.\n\n"
@@ -180,22 +182,22 @@ def access_denied_kb(user_id: int) -> InlineKeyboardMarkup:
     else:
         url = f"tg://user?id={OWNER_ID}"
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🚨 𝗔𝗖𝗖𝗘𝗦𝗦 𝗡𝗘𝗘𝗗", url=url)
+        InlineKeyboardButton("🚨 𝗔𝗖𝗖𝗘𝗦𝗦 𝗡𝗘𝗘𝗗", url=url, api_kwargs=_R)
     ]])
 
 def owner_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
-        [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘"),   KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣")],
-        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧"),   KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧")],
-        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡"),     KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡")],
-        [KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧"),   KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧")],
+        [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘", api_kwargs=_R), KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣", api_kwargs=_R)],
+        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R),  KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R)],
+        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R),    KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R)],
+        [KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧", api_kwargs=_R),  KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧", api_kwargs=_R)],
     ], resize_keyboard=True)
 
 def admin_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
-        [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘"),   KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣")],
-        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧"),   KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧")],
-        [KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧"),   KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧")],
+        [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘", api_kwargs=_R), KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣", api_kwargs=_R)],
+        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R),  KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R)],
+        [KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧", api_kwargs=_R),  KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧", api_kwargs=_R)],
     ], resize_keyboard=True)
 
 def get_kb(uid: int) -> ReplyKeyboardMarkup:
@@ -423,11 +425,11 @@ async def show_accounts(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int
     text = "\n".join(lines)
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("◀️ PRV", callback_data=f"acc:{page - 1}"),
-            InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="acc:noop"),
-            InlineKeyboardButton("NXT ▶️", callback_data=f"acc:{page + 1}"),
+            InlineKeyboardButton("◀️ PRV", callback_data=f"acc:{page - 1}", api_kwargs={"style": "success"}),
+            InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="acc:noop", api_kwargs=_R),
+            InlineKeyboardButton("NXT ▶️", callback_data=f"acc:{page + 1}", api_kwargs={"style": "success"}),
         ],
-        [InlineKeyboardButton("🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", callback_data=f"acc_rm:{page}")],
+        [InlineKeyboardButton("🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", callback_data=f"acc_rm:{page}", api_kwargs=_R)],
     ])
 
     if is_cb:
@@ -657,7 +659,7 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("💣 𝗟𝗘𝗔𝗩𝗘 𝗧𝗢 𝗩𝗖",
-                                 callback_data=f"leave:{session_id}")
+                                 callback_data=f"leave:{session_id}", api_kwargs=_R)
         ]])
     )
 
@@ -742,11 +744,11 @@ async def show_admins(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int =
     text = "\n".join(lines)
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("◀️ PRV", callback_data=f"adm:{page - 1}"),
-            InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="adm:noop"),
-            InlineKeyboardButton("NXT ▶️", callback_data=f"adm:{page + 1}"),
+            InlineKeyboardButton("◀️ PRV", callback_data=f"adm:{page - 1}", api_kwargs={"style": "success"}),
+            InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="adm:noop", api_kwargs=_R),
+            InlineKeyboardButton("NXT ▶️", callback_data=f"adm:{page + 1}", api_kwargs={"style": "success"}),
         ],
-        [InlineKeyboardButton("🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗗𝗠𝗜𝗡", callback_data=f"adm_rm:{page}")],
+        [InlineKeyboardButton("🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗗𝗠𝗜𝗡", callback_data=f"adm_rm:{page}", api_kwargs=_R)],
     ])
 
     is_cb = isinstance(src, Update) and src.callback_query is not None
