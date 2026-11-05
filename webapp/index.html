@@ -326,7 +326,7 @@ const S = {
   acc: [], adm: [], loaded: { accounts: false, admins: false },
   page: { accounts: 0, admins: 0 }, q: { accounts: "", admins: "" }, f: { accounts: "all", admins: "all" },
   st: {}, inflight: 0, force: false, token: 0,
-  counts: {},
+  counts: {}, auth: "",
 };
 
 /* ───────── helpers ───────── */
@@ -350,16 +350,18 @@ function toast(msg, err = false) {
 async function api(path, body = {}) {
   const r = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "tma " + tg.initData },
+    headers: { "Content-Type": "application/json", "Authorization": S.auth },
     body: JSON.stringify(body), cache: "no-store",
   });
   let j = {}; try { j = await r.json(); } catch (_) {}
-  if (r.status === 401) { const e = new Error("auth"); e.auth = true; throw e; }
+  if (r.status === 401) { const e = new Error("auth"); e.auth = true; e.code = j.error; throw e; }
   if (r.status === 403 && !j.error) { const e = new Error("auth"); e.auth = true; throw e; }
   if (!r.ok) { const e = new Error(j.error || "error"); e.code = j.error; e.status = r.status; throw e; }
   return j;
 }
-const authFail = () => lock("Session expired", "Please close this panel and open it again from the bot.");
+const authFail = (e) => (e && e.code === "expired")
+  ? lock("Link expired", "Send /start to the bot, then open the panel again.")
+  : lock("Session expired", "Please close this panel and open it again from the bot.");
 
 function countTo(el, to) {
   if (!el) return;
@@ -415,7 +417,7 @@ async function loadTab(tab) {
     S.loaded[tab] = true; render(tab, true);
     if (tab === "accounts") pump();
   } catch (e) {
-    if (e.auth) return authFail();
+    if (e.auth) return authFail(e);
     $(tab === "accounts" ? "#rA" : "#rD").innerHTML = emptyHtml("alert", "Could not load", "Check your connection and tap refresh.");
   }
 }
@@ -554,7 +556,7 @@ async function check(rid) {
   S.inflight++; S.busy.add(rid); const tok = S.token;
   let live = false;
   try { live = (await api("/api/accounts/status", { rid, force: S.force })).live; }
-  catch (e) { if (e.auth) { S.inflight--; return authFail(); } }
+  catch (e) { if (e.auth) { S.inflight--; return authFail(e); } }
   S.busy.delete(rid); S.inflight--;
   if (tok !== S.token) return pump();
   S.st[rid] = live;
@@ -582,7 +584,7 @@ async function confirmRemove() {
     await cfg.run();
     notify("success"); closeSheet(); toast(cfg.done);
   } catch (e) {
-    if (e.auth) { closeSheet(); return authFail(); }
+    if (e.auth) { closeSheet(); return authFail(e); }
     notify("error");
     const m = { lent_out: "This account is lent to an admin.", lent_in: "This account was given to you.", not_found: "Already removed." }[e.code] || "Something went wrong.";
     toast(m, true); closeSheet();
@@ -673,7 +675,12 @@ function bind() {
 
 /* ───────── boot ───────── */
 async function boot() {
-  if (!tg || !tg.initData) return lock("Private panel", "This page works only when opened from the bot inside Telegram.");
+  const qs = new URLSearchParams(location.search), tok = qs.get("t");
+  const inTg = !!tg && tg.platform !== "unknown";
+  if (tg && tg.initData) S.auth = "tma " + tg.initData;           // inline button
+  else if (inTg && tok) S.auth = "tok " + tok;                    // reply-keyboard button
+  else return lock("Private panel", "This page works only when opened from the bot inside Telegram.");
+  if (tok) { try { history.replaceState(null, "", location.pathname + "?tab=" + (qs.get("tab") || "accounts")); } catch (_) {} }
   try {
     tg.ready(); tg.expand();
     tg.setHeaderColor("#ffffff"); tg.setBackgroundColor("#ffffff");
@@ -682,7 +689,7 @@ async function boot() {
   } catch (_) {}
   let me;
   try { me = await api("/api/me"); }
-  catch (e) { return e.auth ? lock("Access denied", "Only bot admins can open this panel. Open it from the bot.") : lock("Connection problem", "Could not reach the server. Close and open again."); }
+  catch (e) { return (e.auth || e.status === 403) ? (e.code === "expired" ? authFail(e) : lock("Access denied", "Only bot admins can open this panel. Open it from the bot.")) : lock("Connection problem", "Could not reach the server. Close and open again."); }
   S.me = me;
   const roleTxt = { owner: "Owner", premium: "Premium admin", normal: "Admin" }[me.role] || "Admin";
   $("#role").innerHTML = `${ico(me.role === "premium" ? "crown" : "shield")}<span>${roleTxt}</span>`;
@@ -690,7 +697,7 @@ async function boot() {
   if (!me.can_manage) { $('#seg button[data-tab="admins"]').style.display = "none"; $("#seg").style.gridAutoColumns = "1fr"; }
   $("#app").hidden = false;
   bind();
-  const want = new URLSearchParams(location.search).get("tab") === "admins" ? "admins" : "accounts";
+  const want = qs.get("tab") === "admins" ? "admins" : "accounts";
   requestAnimationFrame(() => setTab(want, true));
   if (me.can_manage) api("/api/admins").then(j => { $("#cD").textContent = j.rows.length; }).catch(() => {});
 }
