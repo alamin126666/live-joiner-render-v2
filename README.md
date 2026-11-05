@@ -71,7 +71,18 @@ Render Free plan er disk **ephemeral** — restart/redeploy hole `accounts.json`
 
 ## Premium Emoji (Bot API 9.4+)
 Bot jei Telegram account diye BotFather e banano, oi account e **Telegram Premium** thakte hobe.
-- `bot.py` er bhitor `PREMIUM_EMOJI_IDS` e sob normal emoji er pashe `"GET_PREMIUM_ID"` bosano ache.
-- Oi jaygay premium emoji er ID boshan (sudhu songkha). ID na boshale oi emoji normal-ই thakbe, error hoy na.
+- Beshi emoji soriye shudhu dorkari **28 ta** emoji rakha hoyeche. Baki jaygay **text + 𝗳𝗼𝗻𝘁** (𝗠𝗮𝘁𝗵 𝗦𝗮𝗻𝘀 𝗕𝗼𝗹𝗱) use kora hoyeche.
+- `bot.py` er `PREMIUM_EMOJI_IDS` e **1 emoji = 1 line**, sobar pashe `"GET_PREMIUM_ID"` bosano ache (comment e lekha ache kothay use hoy).
+- Oi `GET_PREMIUM_ID` er jaygay premium emoji er ID (shudhu songkha) boshan. ID na boshale normal emoji thakbe, error hoy na.
+- Notun emoji use korle dict e ekta line add korun: `"😀": "123456789",`
 - Message ar button duitei auto premium hoy. Button er **shurur** emoji button icon hoy.
 - Limit: inline mode ar channel e kaj kore na.
+
+## UI / Animation
+- **/start** e dashboard (ID, Role, Accounts, Lent/Received, Admins) + ❤️ message effect.
+- **ALL ACCOUNT / ALL ADMIN** text-header table: `NO ┃ NUMBER ┃ DATE ┃ LIVE` / `NO ┃ ID ┃ TYPE ┃ SET ┃ I/E ┃ ACC`, stat line, PRV/NXT + 🔄 REFRESH + REMOVE.
+- Table load howar somoy **bouncing bar + spinner** animation (`⠋ Loading... ▱▱▰▰▰▰▱▱▱▱▱▱`) — jotokkhon load hoy totokkhon cholte thake.
+- Join Live / Join CH/GRP / Import / Leave VC / Add Account e **live ticker**: spinner ghorte thake, progress bar er matha blink kore,
+  account process hoy ar count update hoy. Edit flood-safe (same text hole edit hoy na, `RetryAfter` e auto thame).
+- Success message (login, join, admin add, import) e message effect. Effect support na korle auto effect chara jay.
+- Prompt gulote `/cancel` hint.

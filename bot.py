@@ -15,6 +15,7 @@ from telegram import (
     Update, InlineKeyboardMarkup, ReplyKeyboardMarkup,
     InlineKeyboardButton as _TgInlineButton, KeyboardButton as _TgKeyButton
 )
+from telegram.error import TelegramError, RetryAfter
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, ExtBot, filters
@@ -70,59 +71,40 @@ _owner_username_cache: str | None = None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PREMIUM EMOJI  (Bot API 9.4+ — bot যে account দিয়ে বানানো, তাতে Telegram Premium থাকতে হবে)
-# নিচে প্রতিটা সাধারণ emoji এর পাশে "GET_PREMIUM_ID" এর জায়গায় premium emoji এর ID বসান।
-# "GET_PREMIUM_ID" (বা সংখ্যা ছাড়া কিছু) থাকলে ওই emoji সাধারণই থাকবে।
+# নিচের প্রতিটা line = বটে ব্যবহার হওয়া একটা emoji (বেশি emoji বাদ দিয়ে শুধু দরকারি গুলো রাখা হয়েছে)।
+# "GET_PREMIUM_ID" এর জায়গায় সেই emoji এর premium ID (শুধু সংখ্যা) বসান।
+# "GET_PREMIUM_ID" (বা সংখ্যা ছাড়া কিছু) থাকলে ওই emoji সাধারণই থাকবে, error হবে না।
+# নতুন emoji ব্যবহার করলে এখানে আরেকটা line যোগ করুন:  "😀": "123456789",
 # ═══════════════════════════════════════════════════════════════════════════════
 PREMIUM_EMOJI_IDS = {
-    "✅": "6226699395098745883",
-    "🟢": "6321328167558585449",
-    "🔴": "6323418085759919255",
-    "🚨": "5395695537687123235",
-    "👨‍👩‍👦": "4927046070900360103",
-    "➕": "5397916757333654639",
-    "🗄": "5262529363710060188",
-    "📥": "5443127283898405358",
-    "📤": "5445355530111437729",
-    "🤖": "5372981976804366741",
-    "🛜": "5402436682131718162",
-    "⏺": "5195287308479242646",
-    "🚫": "6264989883241076562",
-    "📮": "5287533898803211359",
-    "📌": "5397782960512444700",
-    "🥰": "5416015487525988007",
-    "❌": "6294194896349699910",
-    "📊": "6226505614764285291",
-    "📱": "5407025283456835913",
-    "👇": "6114077020361070827",
-    "⚠️": "5420323339723881652",
-    "🔄": "5253464392850221514",
-    "⏳": "6138579366403119002",
-    "🔐": "5291873529464122510",
-    "🎉": "5461151367559141950",
-    "👤": "5249053508681883137",
-    "💫": "5348181392528253881",
-    "📋": "5197269100878907942",
-    "🔒": "5296369303661067030",
-    "🎁": "6116072659735287323",
-    "🗑️": "5445267414562389170",
-    "🎥": "6334554201519031929",
-    "🎯": "5463274047771000031",
-    "✔️": "5206607081334906820",
-    "💣": "5280569974404966639",
-    "🐍": "6136567092620564683",
-    "🪖": "5357188789351490453",
-    "♻️": "5377584064326804458",
-    "👑": "6266995104687330978",
-    "💡": "6100202351849642503",
-    "⛔": "5260293700088511294",
-    "🗨️": "5316904813613556587",
-    "📦": "5472335930549347896",
-    "🎊": "5956192270213452101",
-    "📭": "5352896944496728039",
-    "👋": "5440431182602842059",
-    "✨": "6285088169817805553",
-    "◀️": "6138930810692049889",
-    "▶️": "6138500424904219564",
+    "✅": "6267008582294705964",  # success / done title (login, code sent, join, import, admin added, left VC)
+    "❌": "6294194896349699910",  # error / cancel / failed title
+    "⚠️": "6267039884016358504",  # warning (already exists, invalid input, flood wait, expired)
+    "⛔": "5188187560035234546",  # no access / blocked account
+    "🚫": "6339344004882112151",  # Cancelled + You Not Have Any Access
+    "🟢": "5215685881989442149",  # LIVE status dot + admin ON flag + keyboard JOIN CH/GRP button
+    "🔴": "5398038979217989221",  # OFF status dot + admin OFF flag
+    "🥰": "6269181779911908635",  # /start welcome header
+    "👑": "6266995104687330978",  # Add admin summary (User Id) + cancel message
+    "🤖": "5172522439917175584",  # Join status title (Joining Accounts / Live VC / Group)
+    "📱": "5407025283456835913",  # ADD ACCOUNT prompt title
+    "🔐": "5291873529464122510",  # 2FA Password prompt title
+    "🆔": "5014902839575577394",  # Admin User ID prompt title
+    "🎥": "5389039613983602470",  # Join Live link prompt title
+    "📢": "6068631133883471225",  # Channel / Group link prompt title
+    "📦": "5472335930549347896",  # Premium admin — Your Have Accounts title
+    "🗄": "6321207771035338339",  # ALL ACCOUNT / ALL ADMIN keyboard button + ALL ACCOUNT HISTORY title
+    "🪖": "5361684864196157805",  # ALL ADMIN HISTORY title + ADMIN SETTING ACCESS button
+    "♻️": "5377584064326804458",  # BOT IMPORT & EXPORT button (admin setting)
+    "📥": "6053338928595870015",  # BOT IMPORT button + import messages
+    "📤": "5445355530111437729",  # BOT EXPORT button + export caption
+    "➕": "5397916757333654639",  # ADD ACCOUNT / ADD ADMIN keyboard button
+    "👨‍👩‍👦": "5836747361400918804",  # JOIN LIVE keyboard button
+    "🔄": "5253464392850221514",  # REFRESH button
+    "🗑️": "5445267414562389170",  # REMOVE button + Account/Admin Removed title
+    "💣": "5375445874988036618",  # LEAVE TO VC button + Leaving VC title
+    "🚨": "6267144651153609853",  # ACCESS NEED button (no access screen)
+    "📭": "5352896944496728039",  # Empty list (no account / no admin / no session)
 }
 
 EMOJI_MAP: dict = {k: str(v).strip() for k, v in PREMIUM_EMOJI_IDS.items()
@@ -172,7 +154,15 @@ class PremiumBot(ExtBot):
     async def send_message(self, chat_id, text, *args, **kwargs):
         if not args:
             text = _premiumize(text, kwargs)
-        return await super().send_message(chat_id, text, *args, **kwargs)
+        try:
+            return await super().send_message(chat_id, text, *args, **kwargs)
+        except TelegramError:
+            ak = kwargs.get("api_kwargs") or {}
+            if "message_effect_id" not in ak:
+                raise
+            # effect support না থাকলে (group/পুরনো client) effect ছাড়াই পাঠাই
+            kwargs["api_kwargs"] = {k: v for k, v in ak.items() if k != "message_effect_id"} or None
+            return await super().send_message(chat_id, text, *args, **kwargs)
 
     async def edit_message_text(self, text, *args, **kwargs):
         if not args:
@@ -379,6 +369,106 @@ async def get_client(uid: int, phone: str, session_str: str) -> TelegramClient:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Telegram Bot API 9.0+ button color — works on Telegram ≥ Feb 9 2026
 _R = {"style": "danger"}  # "danger" = red  |  "success" = green  |  "primary" = blue
+LINE = "━━━━━━━━━━━━━━━━━━━━"
+SEP = "┃"
+
+# Telegram message effects (শুধু private chat এ; কাজ না করলে auto effect ছাড়া যায়)
+FX_PARTY = {"message_effect_id": "5046509860389126442"}   # 🎉
+FX_FIRE  = {"message_effect_id": "5104841245755180586"}   # 🔥
+FX_LIKE  = {"message_effect_id": "5107584321108051014"}   # 👍
+FX_HEART = {"message_effect_id": "5044134455711629726"}   # ❤️
+
+def mb(s: str) -> str:
+    """ASCII -> 𝗠𝗮𝘁𝗵 𝗦𝗮𝗻𝘀 𝗕𝗼𝗹𝗱 (বটের label style)"""
+    out = []
+    for ch in s:
+        if "A" <= ch <= "Z":
+            out.append(chr(0x1D5D4 + ord(ch) - 65))
+        elif "a" <= ch <= "z":
+            out.append(chr(0x1D5EE + ord(ch) - 97))
+        elif "0" <= ch <= "9":
+            out.append(chr(0x1D7EC + ord(ch) - 48))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+def pbar(done: int, total: int, width: int = 10, tick=None) -> str:
+    """▰▰▰▱▱▱ 30%  —  tick দিলে progress এর মাথাটা blink করে (animation)"""
+    total = max(int(total), 1)
+    done = max(0, min(int(done), total))
+    f = int(round(width * done / total))
+    cells = ["▰"] * f + ["▱"] * (width - f)
+    if tick is not None and f < width:
+        cells[f] = "▰" if tick % 2 else "▱"
+    return "".join(cells) + f" {int(100 * done / total)}%"
+
+# ── Animation (emoji নয়, তাই premium ID লাগে না) ───────────────────────────
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"            # braille spinner
+DOTS = ["", ".", "..", "..."]
+
+def spin(tick) -> str:
+    return SPIN[int(tick) % len(SPIN)]
+
+def sweep(tick: int, width: int = 12, size: int = 4) -> str:
+    """▱▱▰▰▰▰▱▱▱▱▱▱  —  ডান-বাম bounce করা loading bar"""
+    span = max(width - size, 1)
+    period = span * 2
+    p = int(tick) % period
+    pos = p if p <= span else period - p
+    return "▱" * pos + "▰" * size + "▱" * (width - size - pos)
+
+def loading_frame(title: str, tick: int, label: str = "Loading") -> str:
+    return (f"{title}\n{LINE}\n"
+            f"{spin(tick)} <b>{mb(label)}{DOTS[tick % len(DOTS)]}</b>\n"
+            f"{sweep(tick)}")
+
+async def animate(edit, render, work, interval: float = 0.9, max_frames: int = 90):
+    """work (coroutine) চলার সময় render(tick) দিয়ে message বারবার edit করে।
+    edit(text) = async callable. Flood-safe: একই text হলে edit হয় না, RetryAfter এ থামে।"""
+    task = asyncio.ensure_future(work)
+    tick, last = 0, None
+    try:
+        while not task.done() and tick < max_frames:
+            text = render(tick)
+            if text != last:
+                try:
+                    await edit(text)
+                    last = text
+                except RetryAfter as e:
+                    await asyncio.sleep(min(float(e.retry_after), 5))
+                except Exception:
+                    pass
+            tick += 1
+            try:
+                await asyncio.wait_for(asyncio.shield(task), interval)
+            except asyncio.TimeoutError:
+                pass
+        return await task
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
+
+async def run_with_loading(edit, title: str, coro, label: str = "Loading"):
+    """coro চলার সময় message এ bouncing loading animation দেখায় (edit(text) async callable)"""
+    return await animate(edit, lambda t: loading_frame(title, t, label), coro, interval=0.8)
+
+async def _final_msg(update: Update, status_msg, text: str, kb=None, fx=FX_PARTY):
+    """status message মুছে নতুন message (message effect সহ) পাঠায়"""
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+    return await update.effective_chat.send_message(
+        text, parse_mode="HTML", reply_markup=kb, api_kwargs=dict(fx))
+
+def err_card(title: str, hint: str = "") -> str:
+    t = f"❌ <b>{title}</b>"
+    if hint:
+        t += f"\n{LINE}\n<i>{mb('Tip')} : {hint}</i>"
+    return t
+
+CANCEL_HINT = f"\n\n<i>{mb('Cancel')} : /cancel</i>"
+
 def _G(on: bool = True) -> dict:
     return {"style": "success"} if on else _R
 
@@ -420,11 +510,19 @@ KEYBOARD_PATTERNS = [
 def is_keyboard_button(text: str) -> bool:
     return any(p in text for p in KEYBOARD_PATTERNS)
 
-def _format_join_status(sd: dict) -> str:
+def _format_join_status(sd: dict, tick=None, title: str = "Joining Accounts") -> str:
+    total = sd.get("total", 0)
+    pending = max(0, sd.get("pending", 0))
+    busy = tick is not None and pending > 0
+    head = f"{spin(tick)} " if busy else "✓ "
     return (
-        f"🤖 𝗧𝗼𝘁𝗮𝗹 𝗕𝗼𝘁 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 : {sd.get('total', 0)}\n\n"
-        f"🛜 𝗣𝗮𝗻𝗱𝗶𝗻𝗴 𝗝𝗼𝗶𝗻 : {max(0, sd.get('pending', 0))}\n\n"
-        f"⏺ 𝗔𝗹𝗿𝗲𝗮𝗱𝘆 𝗝𝗼𝗶𝗻 : {sd.get('already', 0)}"
+        f"🤖 <b>{mb(title)}</b>\n"
+        f"{LINE}\n"
+        f"{mb('Total Bot Account')} : {total}\n"
+        f"{mb('Pending Join')} : {pending}\n"
+        f"{mb('Already Join')} : {sd.get('already', 0)}\n"
+        f"{LINE}\n"
+        f"{head}{pbar(total - pending, total, tick=tick if busy else None)}"
     )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -434,27 +532,47 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         uid = update.effective_user.id if update.effective_user else 0
         await update.message.reply_text(
-            f"🚫 <b>𝗬𝗼𝘂 𝗡𝗼𝘁 𝗛𝗮𝘃𝗲 𝗔𝗻𝘆 𝗔𝗰𝗰𝗲𝘀𝘀.</b>\n\n"
-            f"📮 <b>𝗬𝗼𝘂𝗿 𝗜𝗱 :</b> <code>{uid}</code>\n\n"
-            f"📌 <b>𝗬𝗼𝘂 𝗡𝗲𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗧𝗵𝗲𝗻 𝗖𝗼𝗻𝘁𝗮𝗰𝘁 𝗢𝘄𝗻𝗲𝗿.</b>",
+            f"🚫 <b>𝗬𝗼𝘂 𝗡𝗼𝘁 𝗛𝗮𝘃𝗲 𝗔𝗻𝘆 𝗔𝗰𝗰𝗲𝘀𝘀.</b>\n"
+            f"{LINE}\n"
+            f"<b>𝗬𝗼𝘂𝗿 𝗜𝗱 :</b> <code>{uid}</code>\n\n"
+            f"<i>𝗬𝗼𝘂 𝗡𝗲𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗧𝗵𝗲𝗻 𝗖𝗼𝗻𝘁𝗮𝗰𝘁 𝗢𝘄𝗻𝗲𝗿.</i>",
             parse_mode="HTML",
             reply_markup=access_denied_kb(uid)
         )
         return
     uid = update.effective_user.id
     user_flow.pop(uid, None)
+    info = admins.get(uid, {})
     if is_owner(uid):
-        msg = ("𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝗧𝗼 𝗩𝗰 𝗝𝗼𝗶𝗻 𝗕𝗼𝘁 𝗢𝘄𝗻𝗲𝗿 𝗕𝗮𝗯𝘂 🥰\n\n"
-               "𝗬𝗼𝘂 𝗖𝗮𝗻 𝗨𝘀𝗲 𝗔𝗻𝘆𝘁𝗵𝗶𝗻𝗴𝘀...")
+        head = "𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝗧𝗼 𝗩𝗰 𝗝𝗼𝗶𝗻 𝗕𝗼𝘁 𝗢𝘄𝗻𝗲𝗿 𝗕𝗮𝗯𝘂 🥰"
+        role = mb('OWNER')
+        foot = "𝗬𝗼𝘂 𝗖𝗮𝗻 𝗨𝘀𝗲 𝗔𝗻𝘆𝘁𝗵𝗶𝗻𝗴𝘀..."
     else:
-        msg = ("𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝗧𝗼 𝗩𝗰 𝗝𝗼𝗶𝗻 𝗕𝗼𝘁 🥰\n\n"
-               "𝗡𝗼𝘄 𝗬𝗼𝘂 𝗖𝗮𝗻 𝗨𝘀𝗲 𝗧𝗵𝗶𝘀 𝗕𝗼𝘁....")
-    await update.message.reply_text(msg, reply_markup=get_kb(uid))
+        head = "𝗪𝗲𝗹𝗰𝗼𝗺𝗲 𝗧𝗼 𝗩𝗰 𝗝𝗼𝗶𝗻 𝗕𝗼𝘁 🥰"
+        role = mb('PREMIUM ADMIN') if info.get("type") == "premium" else mb('NORMAL ADMIN')
+        foot = "𝗡𝗼𝘄 𝗬𝗼𝘂 𝗖𝗮𝗻 𝗨𝘀𝗲 𝗧𝗵𝗶𝘀 𝗕𝗼𝘁...."
+    own = user_accounts(uid)
+    lent_out = sum(1 for i in own.values() if i.get("lent_to"))
+    got = len(lent_in_accounts(uid))
+    rows = [
+        f"<b>{mb('ID')}</b> : <code>{uid}</code>",
+        f"<b>{mb('Role')}</b> : {role}",
+        f"<b>{mb('Accounts')}</b> : {len(own) - lent_out + got}",
+    ]
+    if lent_out:
+        rows.append(f"<b>{mb('Lent')}</b> : {lent_out}")
+    if got:
+        rows.append(f"<b>{mb('Received')}</b> : {got}")
+    if can_manage_admins(uid):
+        rows.append(f"<b>{mb('Admins')}</b> : {len(managed_admins(uid))}")
+    msg = f"<b>{head}</b>\n{LINE}\n" + "\n".join(rows) + f"\n{LINE}\n<b>{foot}</b>"
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_kb(uid),
+                                    api_kwargs=dict(FX_HEART))
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id if update.effective_user else 0
     user_flow.pop(uid, None)
-    await update.message.reply_text("❌ Cancelled.", reply_markup=get_kb(uid))
+    await update.message.reply_text(f"🚫 <b>{mb('Cancelled')}</b>", parse_mode="HTML", reply_markup=get_kb(uid))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ADD ACCOUNT
@@ -463,9 +581,11 @@ async def start_add_account(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     n = len(user_accounts(uid))
     await update.message.reply_text(
-        f"📊 <b>𝗬𝗼𝘂𝗿 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 : {n}</b>\n\n"
-        f"📱 নতুন একাউন্টের নাম্বার দিন 👇\n\n"
-        f"<i>Example : +8801XXXXXXXXX</i>",
+        f"📱 <b>{mb('Add Account')}</b>\n"
+        f"{LINE}\n"
+        f"<b>{mb('Your Account')}</b> : {n}\n\n"
+        f"নতুন একাউন্টের নাম্বার দিন\n"
+        f"<i>{mb('Example')} : +8801XXXXXXXXX</i>" + CANCEL_HINT,
         parse_mode="HTML"
     )
 
@@ -476,41 +596,56 @@ async def handle_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int)
     accs = user_accounts(uid)
     if phone in accs:
         user_flow.pop(uid, None)
-        await update.message.reply_text("⚠️ এই নাম্বার ইতিমধ্যে আপনার লিস্টে আছে!",
+        await update.message.reply_text("⚠️ <b>এই নাম্বার ইতিমধ্যে আপনার লিস্টে আছে!</b>", parse_mode="HTML",
                                         reply_markup=get_kb(uid))
         return
     user_flow[uid]["data"]["phone"] = phone
 
-    status_msg = await update.message.reply_text(
-        "🔄 <i>Connecting to Telegram servers...</i>", parse_mode="HTML")
-    try:
+    stage = {"i": 0}
+    steps = ["Connecting To Telegram", "Sending Verification Code"]
+
+    def render(t):
+        return (f"<b>{mb(steps[stage['i']])}{DOTS[t % len(DOTS)]}</b>\n{LINE}\n"
+                f"{spin(t)} {pbar(stage['i'] + 1, len(steps) + 1, width=8, tick=t)}")
+
+    status_msg = await update.message.reply_text(render(0), parse_mode="HTML")
+
+    async def edit(t):
+        await status_msg.edit_text(t, parse_mode="HTML")
+
+    async def work():
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         await c.connect()
         pending_clients[(uid, phone)] = c
-        await status_msg.edit_text("⏳ <i>Sending verification code...</i>", parse_mode="HTML")
-        r = await c.send_code_request(phone)
+        stage["i"] = 1
+        return await c.send_code_request(phone)
+
+    try:
+        r = await animate(edit, render, work(), interval=0.8)
         user_flow[uid]["data"]["code_hash"] = r.phone_code_hash
         user_flow[uid]["state"] = S_WAIT_CODE
         await status_msg.edit_text(
-            f"✅ <b>Code Sent Successfully!</b>\n\n"
-            f"📱 <code>{html.escape(phone)}</code>\n\n"
-            f"🔐 <b>ভেরিফিকেশন কোড দিন</b> 👇",
+            f"✅ <b>{mb('Code Sent Successfully')}</b>\n"
+            f"{LINE}\n"
+            f"<b>{mb('Number')}</b> : <code>{html.escape(phone)}</code>\n\n"
+            f"ভেরিফিকেশন কোড দিন\n"
+            f"{pbar(1, 1, width=8)}" + CANCEL_HINT,
             parse_mode="HTML"
         )
     except FloodWaitError as e:
         user_flow.pop(uid, None)
-        await status_msg.edit_text(f"⏳ Flood wait: {e.seconds}s")
+        await status_msg.edit_text(f"⚠️ <b>{mb('Flood Wait')} :</b> {e.seconds}s", parse_mode="HTML")
     except Exception as e:
         user_flow.pop(uid, None)
-        await status_msg.edit_text(f"❌ Error: {html.escape(str(e))}")
+        await status_msg.edit_text(f"❌ <b>{mb('Error')} :</b> {html.escape(str(e))}", parse_mode="HTML")
 
 async def handle_code(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
     phone = user_flow[uid]["data"]["phone"]
     client = pending_clients.get((uid, phone))
     if not client:
         user_flow.pop(uid, None)
-        return await update.message.reply_text("❌ Session expired.",
-                                               reply_markup=get_kb(uid))
+        return await update.message.reply_text(f"❌ <b>{mb('Session Expired')}</b>",
+                                               parse_mode="HTML", reply_markup=get_kb(uid))
     code = update.message.text.strip().replace(" ", "")
     try:
         await client.sign_in(phone, code,
@@ -518,29 +653,30 @@ async def handle_code(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
         await _save_account(update, uid, client, phone)
     except SessionPasswordNeededError:
         user_flow[uid]["state"] = S_WAIT_2FA
-        await update.message.reply_text("🔐 <b>2FA Password দিন</b> 👇", parse_mode="HTML")
+        await update.message.reply_text(
+            f"🔐 <b>{mb('2FA Password')}</b>\n{LINE}\nআপনার 2FA Password দিন" + CANCEL_HINT, parse_mode="HTML")
     except (PhoneCodeInvalidError, PhoneCodeExpiredError):
         user_flow.pop(uid, None)
         pending_clients.pop((uid, phone), None)
         try: await client.disconnect()
         except Exception: pass
-        await update.message.reply_text("❌ ভুল বা মেয়াদ শেষ কোড।",
-                                        reply_markup=get_kb(uid))
+        await update.message.reply_text(err_card("ভুল বা মেয়াদ শেষ কোড", f"আবার {mb('ADD ACCOUNT')} দিয়ে চেষ্টা করুন"),
+                                        parse_mode="HTML", reply_markup=get_kb(uid))
     except Exception as e:
         user_flow.pop(uid, None)
         pending_clients.pop((uid, phone), None)
         try: await client.disconnect()
         except Exception: pass
-        await update.message.reply_text(f"❌ Error: {html.escape(str(e))}",
-                                        reply_markup=get_kb(uid))
+        await update.message.reply_text(f"❌ <b>{mb('Error')} :</b> {html.escape(str(e))}",
+                                        parse_mode="HTML", reply_markup=get_kb(uid))
 
 async def handle_2fa(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
     phone = user_flow[uid]["data"]["phone"]
     client = pending_clients.get((uid, phone))
     if not client:
         user_flow.pop(uid, None)
-        return await update.message.reply_text("❌ Session expired.",
-                                               reply_markup=get_kb(uid))
+        return await update.message.reply_text(f"❌ <b>{mb('Session Expired')}</b>",
+                                               parse_mode="HTML", reply_markup=get_kb(uid))
     pwd = update.message.text.strip()
     try:
         await client.sign_in(password=pwd)
@@ -550,8 +686,8 @@ async def handle_2fa(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
         pending_clients.pop((uid, phone), None)
         try: await client.disconnect()
         except Exception: pass
-        await update.message.reply_text(f"❌ Wrong password: {html.escape(str(e))}",
-                                        reply_markup=get_kb(uid))
+        await update.message.reply_text(err_card(mb("Wrong Password"), html.escape(str(e))),
+                                        parse_mode="HTML", reply_markup=get_kb(uid))
 
 async def _save_account(update: Update, uid: int, client: TelegramClient, phone: str):
     me = await client.get_me()
@@ -568,15 +704,17 @@ async def _save_account(update: Update, uid: int, client: TelegramClient, phone:
     pending_clients.pop((uid, phone), None)
     user_flow.pop(uid, None)
     await update.message.reply_text(
-        f"🎉 <b>LOGIN SUCCESSFUL</b> 🎉\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Name:</b> {html.escape(name)}\n"
-        f"📱 <b>Number:</b> <code>{html.escape(phone)}</code>\n"
-        f"✅ <b>Status:</b> Active\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💫 <i>Account added to your list</i>",
+        f"✅ <b>{mb('LOGIN SUCCESSFUL')}</b>\n"
+        f"{LINE}\n"
+        f"<b>{mb('Name')}</b> : {html.escape(name)}\n"
+        f"<b>{mb('Number')}</b> : <code>{html.escape(phone)}</code>\n"
+        f"<b>{mb('Status')}</b> : 🟢 {mb('Active')}\n"
+        f"<b>{mb('Total')}</b> : {len(accs)}\n"
+        f"{LINE}\n"
+        f"<i>{mb('Account Added To Your List')}</i>",
         parse_mode="HTML",
-        reply_markup=get_kb(uid)
+        reply_markup=get_kb(uid),
+        api_kwargs=dict(FX_PARTY),
     )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -596,76 +734,100 @@ async def _check_status_quick(session_str: str) -> str:
             try: await c.disconnect()
             except Exception: pass
 
-async def show_accounts(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int = 0):
-    accs = visible_accounts(uid)
-    is_cb = isinstance(src, Update) and src.callback_query is not None
+def _nav_kb(prefix: str, rm_prefix: str, rm_label: str, page: int, pages: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("‹ 𝗣𝗥𝗩", callback_data=f"{prefix}:{page - 1}", api_kwargs=_G(True)),
+            InlineKeyboardButton(f"{mb('Page')} {page + 1}/{pages}", callback_data=f"{prefix}:noop",
+                                 api_kwargs={"style": "primary"}),
+            InlineKeyboardButton("𝗡𝗫𝗧 ›", callback_data=f"{prefix}:{page + 1}", api_kwargs=_G(True)),
+        ],
+        [
+            InlineKeyboardButton("🔄 𝗥𝗘𝗙𝗥𝗘𝗦𝗛", callback_data=f"{prefix}:{page}", api_kwargs={"style": "primary"}),
+            InlineKeyboardButton(rm_label, callback_data=f"{rm_prefix}:{page}", api_kwargs=_R),
+        ],
+    ])
 
-    if not accs:
-        text = "📋 <b>আপনার কোনো অ্যাকাউন্ট নেই।</b>"
+async def show_accounts(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int = 0):
+    rows = visible_accounts(uid)
+    is_cb = isinstance(src, Update) and src.callback_query is not None
+    title = f"🗄 <b>{mb('ALL ACCOUNT HISTORY')}</b>"
+
+    if not rows:
+        text = (f"{title}\n{LINE}\n📭 <b>কোনো অ্যাকাউন্ট নেই</b>\n\n"
+                f"<i>{mb('ADD ACCOUNT')} চেপে নতুন account যোগ করুন</i>")
         if is_cb:
             await src.callback_query.edit_message_text(text, parse_mode="HTML")
         else:
             await src.message.reply_text(text, parse_mode="HTML", reply_markup=get_kb(uid))
         return
 
-    items = accs
-    total = len(items)
+    total = len(rows)
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     page = max(0, min(page, pages - 1))
     start = page * PER_PAGE
-    page_items = items[start:start + PER_PAGE]
-
-    statuses = await asyncio.gather(*[
-        _check_status_quick(info.get("session", "")) for _, info, _k in page_items
-    ])
-
-    lines = [f"⏺ <b>Account List Page Number : {page + 1}</b>\n"]
-    for i, ((ph, info, kind), st) in enumerate(zip(page_items, statuses)):
-        n = start + i + 1
-        ts = info.get("added_at", 0)
-        try:
-            added = datetime.fromtimestamp(int(ts)).strftime("%d %b %Y")
-        except Exception:
-            added = "—"
-        shown = mask_phone(ph) if kind == "lent_in" else ph     # পাওয়া account এর number পুরো দেখাবে না
-        mark = {"lent_out": " 🔒", "lent_in": " 🎁"}.get(kind, "")
-        lines.append(f"{n}. <code>{html.escape(shown)}</code> - {added} - {st}{mark}")
-    if any(k == "lent_out" for _, _, k in page_items):
-        lines.append("\n🔒 <i>Admin কে দেওয়া (use/remove বন্ধ)</i>")
-    if any(k == "lent_in" for _, _, k in page_items):
-        lines.append("\n🎁 <i>আপনাকে দেওয়া (শুধু use করা যাবে)</i>")
-
-    text = "\n".join(lines)
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("◀️ PRV", callback_data=f"acc:{page - 1}", api_kwargs={"style": "success"}),
-            InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="acc:noop", api_kwargs=_R),
-            InlineKeyboardButton("NXT ▶️", callback_data=f"acc:{page + 1}", api_kwargs={"style": "success"}),
-        ],
-        [InlineKeyboardButton("🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", callback_data=f"acc_rm:{page}", api_kwargs=_R)],
-    ])
+    page_items = rows[start:start + PER_PAGE]
 
     if is_cb:
-        await src.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        async def edit(t, kb=None):
+            await src.callback_query.edit_message_text(t, parse_mode="HTML", reply_markup=kb)
     else:
-        await src.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+        holder = await src.message.reply_text(loading_frame(title, 0), parse_mode="HTML")
+        async def edit(t, kb=None):
+            await holder.edit_text(t, parse_mode="HTML", reply_markup=kb)
+
+    statuses = await run_with_loading(edit, title, asyncio.gather(*[
+        _check_status_quick(info.get("session", "")) for _, info, _k in page_items
+    ]))
+    live = sum(1 for s in statuses if s == "🟢")
+
+    lines = [
+        title,
+        LINE,
+        f"<b>{mb('Total')}</b> {total} {SEP} 🟢 {live} {SEP} 🔴 {len(statuses) - live} {SEP} <b>{mb('Page')}</b> {page + 1}/{pages}",
+        LINE,
+        f"<b>{mb('NO')}</b> {SEP} <b>{mb('NUMBER')}</b> {SEP} <b>{mb('DATE')}</b> {SEP} <b>{mb('LIVE')}</b>",
+        LINE,
+    ]
+    for i, ((ph, info, kind), st) in enumerate(zip(page_items, statuses)):
+        n = start + i + 1
+        try:
+            added = datetime.fromtimestamp(int(info.get("added_at", 0))).strftime("%d %b")
+        except Exception:
+            added = "——"
+        shown = mask_phone(ph) if kind == "lent_in" else ph     # পাওয়া account এর number পুরো দেখাবে না
+        mark = {"lent_out": f" {mb('Lent')}", "lent_in": f" {mb('Got')}"}.get(kind, "")
+        lines.append(f"<code>{n:02d}</code> {SEP} <code>{html.escape(shown)}</code> {SEP} "
+                     f"<code>{added}</code> {SEP} {st}{mark}")
+    lines.append(LINE)
+    if any(k == "lent_out" for _, _, k in page_items):
+        lines.append(f"<i>{mb('Lent')} : Admin কে দেওয়া — use/remove বন্ধ</i>")
+    if any(k == "lent_in" for _, _, k in page_items):
+        lines.append(f"<i>{mb('Got')} : আপনাকে দেওয়া — শুধু use করা যাবে</i>")
+
+    kb = _nav_kb("acc", "acc_rm", "🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘", page, pages)
+    try:
+        await edit("\n".join(lines), kb)
+    except Exception as e:
+        if "not modified" not in str(e).lower():
+            raise
 
 async def handle_rm_acc(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
     try:
         n = int(update.message.text.strip())
     except ValueError:
-        return await update.message.reply_text("❌ একটি সংখ্যা দিন (list number)")
+        return await update.message.reply_text("⚠️ একটি সংখ্যা দিন (list number)")
     rows = visible_accounts(uid)
     if not (1 <= n <= len(rows)):
         return await update.message.reply_text(f"❌ 1 থেকে {len(rows)} এর মধ্যে দিন")
     phone, _info, kind = rows[n - 1]
     if kind == "lent_out":
         return await update.message.reply_text(
-            "🔒 এই account টি admin কে দেওয়া আছে।\n"
+            "⛔ এই account টি admin কে দেওয়া আছে।\n"
             "সেই admin remove না করা পর্যন্ত remove করা যাবে না।")
     if kind == "lent_in":
         return await update.message.reply_text(
-            "🔒 এই account টি আপনাকে দেওয়া হয়েছে — আপনি remove করতে পারবেন না।")
+            "⛔ এই account টি আপনাকে দেওয়া হয়েছে — আপনি remove করতে পারবেন না।")
     accs = user_accounts(uid)
     info = accs.pop(phone)
     set_user_accounts(uid, accs)
@@ -688,7 +850,9 @@ async def handle_rm_acc(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int
 
     user_flow.pop(uid, None)
     await update.message.reply_text(
-        f"✅ <b>Account Removed</b>\n\n📱 <code>{html.escape(phone)}</code>",
+        f"🗑️ <b>{mb('Account Removed')}</b>\n{LINE}\n"
+        f"<b>{mb('Number')}</b> : <code>{html.escape(phone)}</code>\n"
+        f"<b>{mb('Remaining')}</b> : {len(user_accounts(uid))}",
         parse_mode="HTML", reply_markup=get_kb(uid)
     )
 
@@ -697,17 +861,21 @@ async def handle_rm_acc(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int
 # ═══════════════════════════════════════════════════════════════════════════════
 async def ask_live_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎥 <b>Live link বা @username দিন</b> 👇\n\n"
-        "<i>Public : @channelname / t.me/channelname</i>\n"
-        "<i>Private : t.me/+xxxxxxxx</i>",
+        f"🎥 <b>{mb('Send Live Link')}</b>\n"
+        f"{LINE}\n"
+        "Live link বা @username দিন\n\n"
+        f"<i>{mb('Public')} : @channelname / t.me/channelname</i>\n"
+        f"<i>{mb('Private')} : t.me/+xxxxxxxx</i>" + CANCEL_HINT,
         parse_mode="HTML"
     )
 
 async def ask_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🟢 <b>Channel / Group link বা @username দিন</b> 👇\n\n"
-        "<i>Public : @channelname / t.me/channelname</i>\n"
-        "<i>Private : t.me/+xxxxxxxx</i>",
+        f"📢 <b>{mb('Send Channel / Group Link')}</b>\n"
+        f"{LINE}\n"
+        "Channel / Group link বা @username দিন\n\n"
+        f"<i>{mb('Public')} : @channelname / t.me/channelname</i>\n"
+        f"<i>{mb('Private')} : t.me/+xxxxxxxx</i>" + CANCEL_HINT,
         parse_mode="HTML"
     )
 
@@ -716,50 +884,52 @@ async def handle_live_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: 
     accs = usable_accounts(uid)
     if not accs:
         user_flow.pop(uid, None)
-        return await update.message.reply_text("❌ আগে অ্যাকাউন্ট যোগ করুন।",
-                                               reply_markup=get_kb(uid))
+        return await update.message.reply_text(
+            err_card("কোনো ব্যবহারযোগ্য account নেই", f"আগে {mb('ADD ACCOUNT')} দিয়ে account যোগ করুন"),
+            parse_mode="HTML", reply_markup=get_kb(uid))
     user_flow[uid]["data"]["link"] = link
 
     total = len(accs)
     sd = {"total": total, "pending": total, "already": 0}
-    status_msg = await update.message.reply_text(_format_join_status(sd), parse_mode="HTML")
-
+    jt = "Joining Group For VC"
+    status_msg = await update.message.reply_text(_format_join_status(sd, 0, jt), parse_mode="HTML")
     joined_phones = []
-    for phone, info in accs.items():
-        try:
-            client = await get_client(uid, phone, info.get("session", ""))
-            entity, _new = await _ensure_joined(client, link)
-            if entity:
-                joined_phones.append(phone)
-                sd["already"] += 1
+
+    async def _work():
+        for phone, info in accs.items():
+            try:
+                client = await get_client(uid, phone, info.get("session", ""))
+                entity, _new = await _ensure_joined(client, link)
+                if entity:
+                    joined_phones.append(phone)
+                    sd["already"] += 1
+            except Exception as e:
+                logging.warning(f"[JOIN-GRP] {phone}: {e}")
             sd["pending"] -= 1
-        except Exception as e:
-            logging.warning(f"[JOIN-GRP] {phone}: {e}")
-            sd["pending"] -= 1
-        try:
-            await status_msg.edit_text(_format_join_status(sd), parse_mode="HTML")
-        except Exception:
-            pass
+
+    await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
+                  lambda t: _format_join_status(sd, t, jt), _work(), interval=0.9)
 
     if not joined_phones:
         user_flow.pop(uid, None)
         return await status_msg.edit_text(
-            "❌ কোনো account group এ join করতে পারিনি।\n"
-            "Link চেক করুন অথবা group এ access আছে কিনা দেখুন।"
-        )
+            err_card("কোনো account group এ join করতে পারিনি",
+                     "Link চেক করুন অথবা group এ access আছে কিনা দেখুন"),
+            parse_mode="HTML")
 
     user_flow[uid]["data"]["joined_phones"] = joined_phones
 
     if len(joined_phones) == 1:
         user_flow[uid]["data"]["count"] = 1
         vc_msg = await update.message.reply_text(
-            "🔄 <i>Starting VC join...</i>", parse_mode="HTML")
+            f"{spin(0)} <i>{mb('Starting VC Join')}...</i>\n{sweep(0)}", parse_mode="HTML")
         return await _do_vc_join(update, ctx, uid, vc_msg)
 
     user_flow[uid]["state"] = S_WAIT_LIVE_CNT
     await update.message.reply_text(
-        f"✅ <b>{len(joined_phones)}</b> account group এ join হয়েছে।\n\n"
-        f"🎯 কতটি দিয়ে VC-তে Join করাবেন? <b>(1-{len(joined_phones)})</b>",
+        f"✅ <b>{len(joined_phones)}</b> account group এ join হয়েছে।\n"
+        f"{LINE}\n"
+        f"কতটি দিয়ে VC-তে Join করাবেন? <b>(1-{len(joined_phones)})</b>" + CANCEL_HINT,
         parse_mode="HTML"
     )
 
@@ -771,11 +941,11 @@ async def handle_live_count(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid:
         if not 1 <= n <= max_n:
             raise ValueError
     except (ValueError, TypeError):
-        return await update.message.reply_text(f"⚠️ 1 থেকে {max_n} এর মধ্যে দিন")
+        return await update.message.reply_text(f"⚠️ <b>1 থেকে {max_n} এর মধ্যে দিন</b>", parse_mode="HTML")
     user_flow[uid]["data"]["count"] = n
     user_flow[uid]["state"] = None
-    vc_msg = await update.message.reply_text("🔄 <i>Starting VC join...</i>",
-                                              parse_mode="HTML")
+    vc_msg = await update.message.reply_text(
+        f"{spin(0)} <i>{mb('Starting VC Join')}...</i>\n{sweep(0)}", parse_mode="HTML")
     await _do_vc_join(update, ctx, uid, vc_msg)
 
 async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
@@ -794,74 +964,76 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     session_engines = {}
     vchat = None
 
-    for phone in phones:
-        info = accs.get(phone)
-        if not info:
-            sd["pending"] -= 1
-            continue
-        try:
-            client = await get_client(uid, phone, info["session"])
-            entity, _new = await _ensure_joined(client, link)
-            if not entity:
+    vt = "Joining Live VC"
+
+    async def _work():
+        nonlocal vchat
+        for phone in phones:
+            info = accs.get(phone)
+            if not info:
                 sd["pending"] -= 1
                 continue
-
-            call = None
             try:
-                if isinstance(entity, Channel):
-                    full = await client(GetFullChannelRequest(entity))
-                else:
-                    full = await client(GetFullChatRequest(entity.id))
-                call = getattr(full.full_chat, "call", None)
-            except Exception:
+                client = await get_client(uid, phone, info["session"])
+                entity, _new = await _ensure_joined(client, link)
+                if not entity:
+                    sd["pending"] -= 1
+                    continue
+
+                call = None
                 try:
-                    full = await client(GetFullChatRequest(entity.id))
+                    if isinstance(entity, Channel):
+                        full = await client(GetFullChannelRequest(entity))
+                    else:
+                        full = await client(GetFullChatRequest(entity.id))
                     call = getattr(full.full_chat, "call", None)
                 except Exception:
-                    call = None
+                    try:
+                        full = await client(GetFullChatRequest(entity.id))
+                        call = getattr(full.full_chat, "call", None)
+                    except Exception:
+                        call = None
 
-            if call is None:
+                if call is None:
+                    sd["pending"] -= 1
+                    continue
+
+                me = await client.get_me()
+                engine = await _get_engine(uid, phone, client)
+                vchat_id = get_peer_id(entity)
+                await _engine_join(uid, phone, engine, vchat_id, call, me, client)
+
+                handler = _make_remute_handler(client, call, me.id, phone)
+                client.add_event_handler(handler, events.Raw(UpdateGroupCallParticipants))
+                live_handlers.setdefault((uid, phone), []).append(handler)
+
+                st = {"engine": engine, "chat_id": vchat_id,
+                      "call": call, "client": client, "me": me}
+                live_state[(uid, phone)] = st
+                _start_watchdog(uid, phone, st)
+
+                session_phones.append(phone)
+                session_calls[phone] = call
+                session_engines[phone] = engine
+                vchat = vchat_id
+                sd["already"] += 1
                 sd["pending"] -= 1
-                continue
+            except NoActiveGroupCall:
+                sd["pending"] -= 1
+                logging.warning(f"[VC] {phone}: NoActiveGroupCall")
+            except Exception as e:
+                logging.exception(f"[VC] {phone} failed")
+                sd["pending"] -= 1
 
-            me = await client.get_me()
-            engine = await _get_engine(uid, phone, client)
-            vchat_id = get_peer_id(entity)
-            await _engine_join(uid, phone, engine, vchat_id, call, me, client)
-
-            handler = _make_remute_handler(client, call, me.id, phone)
-            client.add_event_handler(handler, events.Raw(UpdateGroupCallParticipants))
-            live_handlers.setdefault((uid, phone), []).append(handler)
-
-            st = {"engine": engine, "chat_id": vchat_id,
-                  "call": call, "client": client, "me": me}
-            live_state[(uid, phone)] = st
-            _start_watchdog(uid, phone, st)
-
-            session_phones.append(phone)
-            session_calls[phone] = call
-            session_engines[phone] = engine
-            vchat = vchat_id
-            sd["already"] += 1
-            sd["pending"] -= 1
-        except NoActiveGroupCall:
-            sd["pending"] -= 1
-            logging.warning(f"[VC] {phone}: NoActiveGroupCall")
-        except Exception as e:
-            logging.exception(f"[VC] {phone} failed")
-            sd["pending"] -= 1
-        try:
-            await status_msg.edit_text(_format_join_status(sd), parse_mode="HTML")
-        except Exception:
-            pass
+    await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
+                  lambda t: _format_join_status(sd, t, vt), _work(), interval=0.9)
 
     user_flow.pop(uid, None)
 
     if not session_phones:
         return await status_msg.edit_text(
-            "❌ কোনো account VC-তে join করতে পারিনি।\n"
-            "Live চালু আছে কিনা চেক করুন।"
-        )
+            err_card("কোনো account VC-তে join করতে পারিনি", "Live চালু আছে কিনা চেক করুন"),
+            parse_mode="HTML")
 
     live_sessions[session_id] = {
         "uid": uid,
@@ -871,16 +1043,17 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         "chat_id": vchat,
     }
 
-    await status_msg.edit_text(
-        f"✅ <b>𝗬𝗼𝘂 𝗟𝗶𝘃𝗲 𝗝𝗼𝗶𝗻 𝗥𝗲𝗾 𝗦𝘂𝗰𝗰𝗲𝘀𝘀</b> ✅\n\n"
-        f"🎯 <b>𝗬𝗼𝘂𝗿 𝗧𝗮𝗿𝗴𝗲𝘁 𝗠𝗲𝗺𝗯𝗲𝗿𝘀 𝗟𝗶𝘃𝗲 𝗝𝗼𝗼𝗶𝗻....</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"✔️ Joined : <b>{len(session_phones)}</b> / {count}",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
+    await _final_msg(
+        update, status_msg,
+        f"✅ <b>𝗬𝗼𝘂 𝗟𝗶𝘃𝗲 𝗝𝗼𝗶𝗻 𝗥𝗲𝗾 𝗦𝘂𝗰𝗰𝗲𝘀𝘀</b>\n"
+        f"{LINE}\n"
+        f"<b>𝗬𝗼𝘂𝗿 𝗧𝗮𝗿𝗴𝗲𝘁 𝗠𝗲𝗺𝗯𝗲𝗿𝘀 𝗟𝗶𝘃𝗲 𝗝𝗼𝗼𝗶𝗻....</b>\n\n"
+        f"<b>{mb('Joined')}</b> : {len(session_phones)} / {count}\n"
+        f"{pbar(len(session_phones), count)}",
+        kb=InlineKeyboardMarkup([[
             InlineKeyboardButton("💣 𝗟𝗘𝗔𝗩𝗘 𝗧𝗢 𝗩𝗖",
                                  callback_data=f"leave:{session_id}", api_kwargs=_R)
-        ]])
+        ]]),
     )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -891,38 +1064,39 @@ async def handle_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: i
     accs = usable_accounts(uid)
     if not accs:
         user_flow.pop(uid, None)
-        return await update.message.reply_text("❌ আগে অ্যাকাউন্ট যোগ করুন।",
-                                               reply_markup=get_kb(uid))
+        return await update.message.reply_text(
+            err_card("কোনো ব্যবহারযোগ্য account নেই", f"আগে {mb('ADD ACCOUNT')} দিয়ে account যোগ করুন"),
+            parse_mode="HTML", reply_markup=get_kb(uid))
 
     total = len(accs)
     sd = {"total": total, "pending": total, "already": 0}
-    status_msg = await update.message.reply_text(_format_join_status(sd), parse_mode="HTML")
+    gt = "Joining Channel / Group"
+    status_msg = await update.message.reply_text(_format_join_status(sd, 0, gt), parse_mode="HTML")
 
-    for phone, info in accs.items():
-        try:
-            client = await get_client(uid, phone, info["session"])
-            entity, _new = await _ensure_joined(client, link)
-            if entity:
-                sd["already"] += 1
+    async def _work():
+        for phone, info in accs.items():
+            try:
+                client = await get_client(uid, phone, info["session"])
+                entity, _new = await _ensure_joined(client, link)
+                if entity:
+                    sd["already"] += 1
+            except Exception as e:
+                logging.warning(f"[GRP] {phone}: {e}")
             sd["pending"] -= 1
-        except Exception as e:
-            logging.warning(f"[GRP] {phone}: {e}")
-            sd["pending"] -= 1
-        try:
-            await status_msg.edit_text(_format_join_status(sd), parse_mode="HTML")
-        except Exception:
-            pass
+
+    await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
+                  lambda t: _format_join_status(sd, t, gt), _work(), interval=0.9)
 
     user_flow.pop(uid, None)
-    await status_msg.edit_text(
-        _format_join_status(sd) + "\n\n✅ <b>Join Completed!</b>",
-        parse_mode="HTML"
-    )
+    await _final_msg(
+        update, status_msg,
+        _format_join_status(sd, None, gt) + f"\n\n✅ <b>{mb('Join Completed!')}</b>",
+        kb=get_kb(uid))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ADD ADMIN / ALL ADMIN
 # ═══════════════════════════════════════════════════════════════════════════════
-ADMIN_SETTING_TITLE = "𝗔𝗗𝗠𝗜𝗡 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 𝗢𝗡/𝗢𝗙𝗙 🐍"
+ADMIN_SETTING_TITLE = "𝗔𝗗𝗠𝗜𝗡 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 𝗢𝗡/𝗢𝗙𝗙"
 
 def draft_settings_kb(d: dict) -> InlineKeyboardMarkup:
     # সব button red; ON করলে green. PREMIUM/NORMAL এর একটাই green থাকবে. NEXT সবসময় green.
@@ -947,20 +1121,22 @@ def draft_confirm_kb() -> InlineKeyboardMarkup:
 def _draft_summary(d: dict) -> str:
     return (
         f"👑 <b>𝗨𝘀𝗲𝗿 𝗜𝗱 :</b> <code>{d['target']}</code>\n\n"
-        f"🪖 <b>𝗔𝗗𝗠𝗜𝗡 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 𝗔𝗖𝗖𝗘𝗦𝗦 :</b> {_yn(d['settings'])}\n\n"
-        f"♻️ <b>𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧 &amp; 𝗘𝗫𝗣𝗢𝗥𝗧</b> {_yn(d['ie'])}\n\n"
-        f"💡 <b>𝗔𝗗𝗠𝗜𝗡 𝗧𝗬𝗣𝗘 :</b> {'𝗣𝗥𝗘𝗠𝗜𝗨𝗠' if d['type'] == 'premium' else '𝗡𝗢𝗥𝗠𝗔𝗟'}"
+        f"<b>𝗔𝗗𝗠𝗜𝗡 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 𝗔𝗖𝗖𝗘𝗦𝗦 :</b> {_yn(d['settings'])}\n\n"
+        f"<b>𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧 &amp; 𝗘𝗫𝗣𝗢𝗥𝗧 :</b> {_yn(d['ie'])}\n\n"
+        f"<b>𝗔𝗗𝗠𝗜𝗡 𝗧𝗬𝗣𝗘 :</b> {'𝗣𝗥𝗘𝗠𝗜𝗨𝗠' if d['type'] == 'premium' else '𝗡𝗢𝗥𝗠𝗔𝗟'}"
     )
 
 async def ask_add_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🆔 <b>Admin user ID দিন</b> 👇", parse_mode="HTML")
+    await update.message.reply_text(
+        f"🆔 <b>{mb('Admin User ID')}</b>\n{LINE}\nAdmin এর numeric user ID দিন" + CANCEL_HINT,
+        parse_mode="HTML")
 
 async def _begin_add_admin(update: Update, uid: int, target: int):
     """User ID পাওয়ার পর ADMIN SETTING ON/OFF message দেখায়"""
     if target == OWNER_ID:
-        return await update.message.reply_text("⚠️ এটা owner ID।", reply_markup=get_kb(uid))
+        return await update.message.reply_text("⚠️ <b>এটা owner এর ID।</b>", parse_mode="HTML", reply_markup=get_kb(uid))
     if target == uid or target in admins:
-        return await update.message.reply_text("⚠️ Already admin।", reply_markup=get_kb(uid))
+        return await update.message.reply_text("⚠️ <b>Already admin।</b>", parse_mode="HTML", reply_markup=get_kb(uid))
     d = {"target": target, "settings": False, "ie": False,
          "type": "normal", "stage": "settings"}
     sent = await update.message.reply_text(ADMIN_SETTING_TITLE,
@@ -974,7 +1150,7 @@ async def handle_add_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: 
     try:
         target = int(update.message.text.strip())
     except ValueError:
-        return await update.message.reply_text("❌ Valid user ID দিন (সংখ্যা)।")
+        return await update.message.reply_text("⚠️ <b>Valid user ID দিন (সংখ্যা)।</b>", parse_mode="HTML")
     user_flow.pop(uid, None)
     await _begin_add_admin(update, uid, target)
 
@@ -1077,7 +1253,7 @@ async def admin_draft_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         return await q.edit_message_text(
             f"👑 <b>𝗨𝘀𝗲𝗿 𝗜𝗱 :</b> <code>{d['target']}</code>\n\n"
-            f"🗨️ <b>𝗖𝗮𝗻𝗻𝗰𝗲𝗹 𝗔𝗱𝗱 𝗔𝗱𝗺𝗶𝗻 𝗥𝗲𝗾...</b>",
+            f"❌ <b>𝗖𝗮𝗻𝗰𝗲𝗹𝗹𝗲𝗱 𝗔𝗱𝗱 𝗔𝗱𝗺𝗶𝗻 𝗥𝗲𝗾...</b>",
             parse_mode="HTML")
 
     # ── YES ──
@@ -1090,9 +1266,12 @@ async def admin_draft_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if d["type"] == "normal":                     # NORMAL: আর কিছু জিজ্ঞেস করবে না
             _create_admin(target, d, uid)
-            return await q.edit_message_text(
-                _draft_summary(d) + "\n\n✅ <b>𝗔𝗱𝗺𝗶𝗻 𝗔𝗱𝗱𝗲𝗱 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆</b>",
-                parse_mode="HTML")
+            try: await q.message.delete()
+            except Exception: pass
+            return await ctx.bot.send_message(
+                q.message.chat_id,
+                _draft_summary(d) + f"\n{LINE}\n✅ <b>𝗔𝗱𝗺𝗶𝗻 𝗔𝗱𝗱𝗲𝗱 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆</b>",
+                parse_mode="HTML", api_kwargs=dict(FX_PARTY))
 
         avail = len(lendable_phones(uid))             # PREMIUM: কয়টা account দেবে?
         if avail == 0:
@@ -1105,9 +1284,10 @@ async def admin_draft_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user_flow[uid] = {"state": S_WAIT_ADMIN_ACCS, "data": {"draft": d}}
         await ctx.bot.send_message(
             q.message.chat_id,
-            f"𝗬𝗼𝘂𝗿 𝗛𝗮𝘃𝗲 𝗔𝗰𝗰𝗼𝘂𝗻𝘁𝘀 : {avail}\n\n"
+            f"📦 <b>𝗬𝗼𝘂𝗿 𝗛𝗮𝘃𝗲 𝗔𝗰𝗰𝗼𝘂𝗻𝘁𝘀 :</b> {avail}\n{LINE}\n"
             f"এখন আপনি আপনার এডমিন কে কয়টি একাউন্ট দিতে চাচ্ছেন?\n"
-            f"(1-{avail})")
+            f"<i>(1-{avail})</i>" + CANCEL_HINT,
+            parse_mode="HTML")
         return
 
     await q.answer()
@@ -1128,7 +1308,7 @@ async def handle_admin_acc_count(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         if not 1 <= n <= len(pool):
             raise ValueError
     except (ValueError, TypeError):
-        return await update.message.reply_text(f"⚠️ 1 থেকে {len(pool)} এর মধ্যে দিন")
+        return await update.message.reply_text(f"⚠️ <b>1 থেকে {len(pool)} এর মধ্যে দিন</b>", parse_mode="HTML")
 
     chosen = pool[:n]                       # এখনো কাউকে দেওয়া হয়নি এমন account থেকে
     await _release_runtime(uid, chosen)     # দাতার চলমান VC/client থাকলে বন্ধ
@@ -1139,11 +1319,12 @@ async def handle_admin_acc_count(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     _create_admin(target, d, uid)
     user_flow.pop(uid, None)
     await update.message.reply_text(
-        _draft_summary(d) + "\n\n"
-        f"🎁 <b>𝗔𝗰𝗰𝗼𝘂𝗻𝘁𝘀 𝗚𝗶𝘃𝗲𝗻 :</b> {n}\n"
-        f"📦 <b>𝗬𝗼𝘂𝗿 𝗥𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴 :</b> {len(pool) - n}\n\n"
+        _draft_summary(d) + f"\n{LINE}\n"
+        f"<b>𝗔𝗰𝗰𝗼𝘂𝗻𝘁𝘀 𝗚𝗶𝘃𝗲𝗻 :</b> {n}\n"
+        f"<b>𝗬𝗼𝘂𝗿 𝗥𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴 :</b> {len(pool) - n}\n"
+        f"{LINE}\n"
         f"✅ <b>𝗔𝗱𝗺𝗶𝗻 𝗔𝗱𝗱𝗲𝗱 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆</b>",
-        parse_mode="HTML", reply_markup=get_kb(uid))
+        parse_mode="HTML", reply_markup=get_kb(uid), api_kwargs=dict(FX_PARTY))
 
 async def remove_admin(target: int, by: int) -> int:
     """admin remove করে; তাকে দেওয়া account গুলো দাতার কাছে ফেরত যায়। ফেরত account সংখ্যা return করে"""
@@ -1175,35 +1356,46 @@ async def show_admins(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int =
     start = page * PER_PAGE
     page_items = items[start:start + PER_PAGE]
     given = lent_counts()
+    title = f"🪖 <b>{mb('ALL ADMIN HISTORY')}</b>"
 
-    lines = [f"⏺ <b>Admin List Page Number : {page + 1}</b>\n"]
+    is_cb = isinstance(src, Update) and src.callback_query is not None
     if not items:
-        lines.append("(কোনো admin নেই)")
+        text = (f"{title}\n{LINE}\n📭 <b>কোনো admin নেই</b>\n\n"
+                f"<i>{mb('ADD ADMIN')} চেপে নতুন admin যোগ করুন</i>")
+        if is_cb:
+            return await src.callback_query.edit_message_text(text, parse_mode="HTML")
+        return await src.message.reply_text(text, parse_mode="HTML", reply_markup=get_kb(uid))
+
+    prem_n = sum(1 for a in items if admins.get(a, {}).get("type") == "premium")
+    lines = [
+        title,
+        LINE,
+        f"<b>{mb('Total')}</b> {total} {SEP} <b>{mb('Prem')}</b> {prem_n} {SEP} <b>{mb('Norm')}</b> {total - prem_n} {SEP} <b>{mb('Page')}</b> {page + 1}/{pages}",
+        LINE,
+        f"<b>{mb('NO')}</b> {SEP} <b>{mb('ID')}</b> {SEP} <b>{mb('TYPE')}</b> {SEP} <b>{mb('SET')}</b> {SEP} <b>{mb('I/E')}</b> {SEP} <b>{mb('ACC')}</b>",
+        LINE,
+    ]
     for i, aid in enumerate(page_items):
         n = start + i + 1
         info = admins.get(aid, {})
         prem = info.get("type") == "premium"
-        line = (f"{n}. <code>{aid}</code> - {'PREMIUM' if prem else 'NORMAL'}"
-                f" - 🪖{_yn(info.get('settings'))} ♻️{_yn(info.get('ie'))}")
-        if prem:
-            line += f" - 🎁{given.get(aid, 0)}"
+        row = (f"<code>{n:02d}</code> {SEP} <code>{aid}</code> {SEP} {mb('PREM') if prem else mb('NORM')} {SEP} "
+               f"{_yn(info.get('settings'))} {SEP} {_yn(info.get('ie'))} {SEP} "
+               f"{('<code>' + str(given.get(aid, 0)) + '</code>') if prem else '—'}")
         if is_owner(uid) and info.get("added_by") not in (None, OWNER_ID):
-            line += f" - ↳{info['added_by']}"
-        lines.append(line)
+            row += f" ↳<code>{info['added_by']}</code>"
+        lines.append(row)
+    lines.append(LINE)
+    lines.append(f"<i>{mb('SET')} = Admin Setting {SEP} {mb('I/E')} = Import/Export {SEP} {mb('ACC')} = Accounts Given</i>")
 
+    kb = _nav_kb("adm", "adm_rm", "🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘", page, pages)
     text = "\n".join(lines)
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("◀️ PRV", callback_data=f"adm:{page - 1}", api_kwargs={"style": "success"}),
-            InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="adm:noop", api_kwargs=_R),
-            InlineKeyboardButton("NXT ▶️", callback_data=f"adm:{page + 1}", api_kwargs={"style": "success"}),
-        ],
-        [InlineKeyboardButton("🗑️ 𝗥𝗘𝗠𝗢𝗩𝗘 𝗔𝗗𝗠𝗜𝗡", callback_data=f"adm_rm:{page}", api_kwargs=_R)],
-    ])
-
-    is_cb = isinstance(src, Update) and src.callback_query is not None
     if is_cb:
-        await src.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        try:
+            await src.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                raise
     else:
         await src.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
@@ -1213,16 +1405,16 @@ async def handle_rm_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: i
     try:
         n = int(update.message.text.strip())
     except ValueError:
-        return await update.message.reply_text("❌ একটি সংখ্যা দিন (list number)")
+        return await update.message.reply_text("⚠️ একটি সংখ্যা দিন (list number)")
     items = managed_admins(uid)
     if not (1 <= n <= len(items)):
         return await update.message.reply_text(f"❌ 1 থেকে {len(items)} এর মধ্যে দিন")
     target = items[n - 1]
     returned = await remove_admin(target, uid)
     user_flow.pop(uid, None)
-    extra = f"\n↩️ <b>Accounts Returned :</b> {returned}" if returned else ""
+    extra = f"\n<b>{mb('Accounts Returned')}</b> : {returned}" if returned else ""
     await update.message.reply_text(
-        f"🗑️ <b>Admin Removed</b>\n\n🆔 <code>{target}</code>{extra}",
+        f"🗑️ <b>{mb('Admin Removed')}</b>\n{LINE}\n<b>{mb('ID')}</b> : <code>{target}</code>{extra}",
         parse_mode="HTML", reply_markup=get_kb(uid)
     )
 
@@ -1231,8 +1423,10 @@ async def handle_rm_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: i
 # ═══════════════════════════════════════════════════════════════════════════════
 async def ask_import(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📥 <b>Session strings এর ফাইল পাঠান</b>\n\n"
-        "<i>JSON file (list of strings) অথবা plain text (per line)</i>",
+        f"📥 <b>{mb('Send Session File')}</b>\n"
+        f"{LINE}\n"
+        "Session strings এর ফাইল পাঠান\n"
+        "<i>JSON file (list of strings) অথবা plain text (per line)</i>" + CANCEL_HINT,
         parse_mode="HTML"
     )
 
@@ -1244,14 +1438,14 @@ async def handle_import_doc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     doc = update.message.document
     if not doc:
-        return await update.message.reply_text("❌ File পাঠান")
+        return await update.message.reply_text("⚠️ <b>File পাঠান</b>", parse_mode="HTML")
 
     try:
         f = await ctx.bot.get_file(doc.file_id)
         data = await f.download_as_bytearray()
         text = data.decode("utf-8", errors="ignore")
     except Exception as e:
-        return await update.message.reply_text(f"❌ File read error: {e}")
+        return await update.message.reply_text(err_card("File read error", html.escape(str(e))), parse_mode="HTML")
 
     sessions = []
     try:
@@ -1264,85 +1458,90 @@ async def handle_import_doc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sessions = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
     if not sessions:
-        return await update.message.reply_text("❌ কোনো valid session string পাওয়া যায়নি।")
+        return await update.message.reply_text(err_card("কোনো valid session string পাওয়া যায়নি"), parse_mode="HTML")
 
     user_flow.pop(uid, None)
     total = len(sessions)
-    pending = total
-    success = 0
+    st = {"pending": total, "success": 0}
 
-    status_msg = await update.message.reply_text(
-        f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗦𝗧𝗥𝗜𝗡𝗚 : {total}\n\n"
-        f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗟𝗚 𝗣𝗔𝗡𝗗𝗜𝗡𝗚 : {pending}\n\n"
-        f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗟𝗚 𝗦𝗨𝗖𝗖𝗘𝗦𝗦 : {success}"
-    )
-
-    for i, sess in enumerate(sessions):
-        pending -= 1
-        try:
-            c = TelegramClient(StringSession(sess), API_ID, API_HASH)
-            await c.connect()
-            me = await asyncio.wait_for(c.get_me(), timeout=10)
-            if not me:
-                raise Exception("Not authorized")
-            phone = f"+{me.phone}" if me.phone else f"user_{me.id}"
-            name = f"{me.first_name or ''} {me.last_name or ''}".strip() or phone
-            accs = user_accounts(uid)
-            if phone not in accs:
-                accs[phone] = {
-                    "name": name,
-                    "session": sess,
-                    "added_at": int(time.time()),
-                    "status": "active",
-                }
-                set_user_accounts(uid, accs)
-            active_clients[(uid, phone)] = c
-            success += 1
-        except Exception as e:
-            logging.warning(f"[IMPORT {i+1}] {e}")
-
-        try:
-            await status_msg.edit_text(
-                f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗦𝗧𝗥𝗜𝗡𝗚 : {total}\n\n"
-                f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗟𝗚 𝗣𝗔𝗡𝗗𝗜𝗡𝗚 : {max(0, pending)}\n\n"
-                f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗟𝗚 𝗦𝗨𝗖𝗖𝗘𝗦𝗦 : {success}"
-            )
-        except Exception:
-            pass
-
-        if success > 0 and success % 10 == 0:
-            try:
-                await update.message.reply_text(
-                    f"🎉 <b>10 accounts logged in!</b>\nTotal success: <b>{success}</b>",
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-
-    try:
-        await status_msg.edit_text(
-            f"🎊 <b>𝗔𝗹𝗹 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗟𝗼𝗴𝗶𝗻 𝗦𝘂𝗰𝗰𝗲𝘀𝘀</b> 🎊\n\n"
-            f"✅ Success: <b>{success}</b> / {total}\n\n"
-            f"𝗡𝗼𝘄 𝗬𝗼𝘂 𝗨𝘀𝗲 𝗩𝗰 𝗕𝗼𝘁....",
-            parse_mode="HTML",
-            reply_markup=get_kb(uid)
+    def _imp_text(t=None):
+        pend = max(0, st["pending"])
+        busy = t is not None and pend > 0
+        head = f"{spin(t)} " if busy else "✓ "
+        return (
+            f"📥 <b>{mb('Importing Accounts')}</b>\n{LINE}\n"
+            f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗦𝗧𝗥𝗜𝗡𝗚 : {total}\n"
+            f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗟𝗚 𝗣𝗔𝗡𝗗𝗜𝗡𝗚 : {pend}\n"
+            f"𝗧𝗢𝗧𝗔𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧 𝗟𝗚 𝗦𝗨𝗖𝗖𝗘𝗦𝗦 : {st['success']}\n"
+            f"{LINE}\n{head}{pbar(total - pend, total, tick=t if busy else None)}"
         )
-    except Exception:
-        pass
+
+    status_msg = await update.message.reply_text(_imp_text(0), parse_mode="HTML")
+
+    async def _work():
+        for i, sess in enumerate(sessions):
+            try:
+                c = TelegramClient(StringSession(sess), API_ID, API_HASH)
+                await c.connect()
+                me = await asyncio.wait_for(c.get_me(), timeout=10)
+                if not me:
+                    raise Exception("Not authorized")
+                phone = f"+{me.phone}" if me.phone else f"user_{me.id}"
+                name = f"{me.first_name or ''} {me.last_name or ''}".strip() or phone
+                accs = user_accounts(uid)
+                if phone not in accs:
+                    accs[phone] = {
+                        "name": name,
+                        "session": sess,
+                        "added_at": int(time.time()),
+                        "status": "active",
+                    }
+                    set_user_accounts(uid, accs)
+                active_clients[(uid, phone)] = c
+                st["success"] += 1
+                if st["success"] % 10 == 0:           # প্রতি ১০ টা login এ milestone message
+                    try:
+                        await update.message.reply_text(
+                            f"<b>{mb('Milestone')}</b> : {st['success']} {mb('accounts logged in')}\n"
+                            f"{pbar(total - max(0, st['pending'] - 1), total)}",
+                            parse_mode="HTML")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logging.warning(f"[IMPORT {i+1}] {e}")
+            st["pending"] -= 1
+
+    await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
+                  _imp_text, _work(), interval=1.0)
+    success = st["success"]
+
+    await _final_msg(
+        update, status_msg,
+        f"✅ <b>𝗔𝗹𝗹 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗟𝗼𝗴𝗶𝗻 𝗦𝘂𝗰𝗰𝗲𝘀𝘀</b>\n"
+        f"{LINE}\n"
+        f"<b>{mb('Success')}</b> : {success} / {total}\n"
+        f"<b>{mb('Failed')}</b> : {total - success}\n"
+        f"{pbar(success, total)}\n"
+        f"{LINE}\n"
+        f"<b>𝗡𝗼𝘄 𝗬𝗼𝘂 𝗨𝘀𝗲 𝗩𝗰 𝗕𝗼𝘁....</b>",
+        kb=get_kb(uid))
 
 async def do_export(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
     accs = user_accounts(uid)
     if not accs:
-        return await update.message.reply_text("📭 কোনো account নেই।")
+        return await update.message.reply_text("📭 <b>কোনো account নেই।</b>", parse_mode="HTML")
     sessions = [info["session"] for info in accs.values() if info.get("session")]
     if not sessions:
-        return await update.message.reply_text("📭 কোনো session string নেই।")
+        return await update.message.reply_text("📭 <b>কোনো session string নেই।</b>", parse_mode="HTML")
 
     buf = io.BytesIO(json.dumps(sessions, indent=2).encode())
     buf.name = f"accounts_{uid}.json"
     await update.message.reply_document(
         document=buf,
-        caption=f"📤 <b>{len(sessions)}</b> session strings exported.",
+        caption=(f"📤 <b>{mb('BOT EXPORT')}</b>\n{LINE}\n"
+                 f"<b>{mb('Sessions')}</b> : {len(sessions)}\n"
+                 f"<b>{mb('Date')}</b> : {datetime.now().strftime('%d %b %Y')}\n"
+                 f"<i>{mb('Warning')} : এই file কাউকে শেয়ার করবেন না</i>"),
         parse_mode="HTML"
     )
 
@@ -1528,37 +1727,54 @@ async def leave_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not session or session["uid"] != q.from_user.id:
         return await q.answer("Session not found", show_alert=True)
 
-    await q.edit_message_text("⏳ <i>Leaving VC...</i>", parse_mode="HTML")
+    await q.answer()
     uid = session["uid"]
     accs = usable_accounts(uid)
-    left = 0
+    phones = list(session["phones"])
+    st_l = {"left": 0}
 
-    for phone in session["phones"]:
-        _stop_watchdog(uid, phone)
-        st = live_state.pop((uid, phone), {})
-        engine = st.get("engine")
-        vchat = st.get("chat_id")
-        call = session["calls"].get(phone)
-        info = accs.get(phone)
-        if not info:
-            continue
-        try:
-            client = await get_client(uid, phone, info["session"])
-            for h in live_handlers.pop((uid, phone), []):
-                try: client.remove_event_handler(h)
-                except Exception: pass
-            if engine is not None and vchat is not None:
-                try: await engine.leave_call(vchat)
-                except NotInCallError: pass
-            elif call:
-                await client(LeaveGroupCallRequest(call=call, source=0))
-            left += 1
-        except Exception as e:
-            logging.error(f"[LEAVE] {phone}: {e}")
+    def _render(t=None):
+        done = st_l["left"]
+        busy = t is not None and done < len(phones)
+        head = f"{spin(t)} " if busy else "✓ "
+        return (f"💣 <b>{mb('Leaving VC')}</b>\n{LINE}\n"
+                f"<b>{mb('Accounts Left')}</b> : {done} / {len(phones)}\n"
+                f"{head}{pbar(done, len(phones), tick=t if busy else None)}")
 
+    await q.edit_message_text(_render(0), parse_mode="HTML")
+
+    async def _work():
+        for phone in phones:
+            _stop_watchdog(uid, phone)
+            st = live_state.pop((uid, phone), {})
+            engine = st.get("engine")
+            vchat = st.get("chat_id")
+            call = session["calls"].get(phone)
+            info = accs.get(phone)
+            if not info:
+                continue
+            try:
+                client = await get_client(uid, phone, info["session"])
+                for h in live_handlers.pop((uid, phone), []):
+                    try: client.remove_event_handler(h)
+                    except Exception: pass
+                if engine is not None and vchat is not None:
+                    try: await engine.leave_call(vchat)
+                    except NotInCallError: pass
+                elif call:
+                    await client(LeaveGroupCallRequest(call=call, source=0))
+                st_l["left"] += 1
+            except Exception as e:
+                logging.error(f"[LEAVE] {phone}: {e}")
+
+    await animate(lambda t: q.edit_message_text(t, parse_mode="HTML"), _render, _work(), interval=1.0)
+
+    left = st_l["left"]
     live_sessions.pop(session_id, None)
     await q.edit_message_text(
-        f"✅ <b>{left}</b> accounts left the VC.",
+        f"✅ <b>{mb('Left VC Success')}</b>\n{LINE}\n"
+        f"<b>{mb('Accounts Left')}</b> : {left}\n"
+        f"{pbar(left, max(left, 1))}",
         parse_mode="HTML"
     )
 
@@ -1567,7 +1783,7 @@ async def leave_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════════════════════
 async def _no_access(update: Update, uid: int):
     user_flow.pop(uid, None)
-    await update.message.reply_text("⛔ আপনার এই access নেই।", reply_markup=get_kb(uid))
+    await update.message.reply_text("⛔ <b>আপনার এই access নেই।</b>", parse_mode="HTML", reply_markup=get_kb(uid))
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
@@ -1621,7 +1837,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if state == S_WAIT_RM_ADMIN:  return await handle_rm_admin(update, ctx, uid)
     if state == S_WAIT_ADMIN_ACCS: return await handle_admin_acc_count(update, ctx, uid)
 
-    await update.message.reply_text("👋 Please use the buttons 👇", reply_markup=get_kb(uid))
+    await update.message.reply_text(f"<b>{mb('Please Use The Buttons')}</b>", parse_mode="HTML", reply_markup=get_kb(uid))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CALLBACK ROUTER
@@ -1646,7 +1862,7 @@ async def callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         page = int(data.split(":")[1])
         user_flow[uid] = {"state": S_WAIT_RM_ACC, "data": {"page": page}}
         return await q.message.reply_text(
-            "🗑️ <b>কোন নাম্বারটি remove করবেন?</b>\n(list number দিন)",
+            "🗑️ <b>কোন নাম্বারটি remove করবেন?</b>\n" + LINE + "\n<i>List এর number দিন</i>" + CANCEL_HINT,
             parse_mode="HTML"
         )
 
@@ -1662,7 +1878,7 @@ async def callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         page = int(data.split(":")[1])
         user_flow[uid] = {"state": S_WAIT_RM_ADMIN, "data": {"page": page}}
         return await q.message.reply_text(
-            "🗑️ <b>কোন ID remove করবেন?</b>\n(list number দিন)",
+            "🗑️ <b>কোন ID remove করবেন?</b>\n" + LINE + "\n<i>List এর number দিন</i>" + CANCEL_HINT,
             parse_mode="HTML"
         )
 
@@ -1705,7 +1921,7 @@ async def cmd_rm_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if target not in mine:
         return await update.message.reply_text("⚠️ Not admin")
     returned = await remove_admin(target, uid)
-    extra = f"\n↩️ Accounts returned: {returned}" if returned else ""
+    extra = f"\nAccounts returned: {returned}" if returned else ""
     await update.message.reply_text(f"🗑️ Removed: `{target}`{extra}", parse_mode="Markdown")
 
 async def cmd_list_admins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1713,7 +1929,7 @@ async def cmd_list_admins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not can_manage_admins(uid):
         return
     cur = "\n".join(f"• `{a}`" for a in managed_admins(uid)) or "(none)"
-    head = f"👑 Owner: `{OWNER_ID}`\n\n" if is_owner(uid) else ""
+    head = f"Owner: `{OWNER_ID}`\n\n" if is_owner(uid) else ""
     await update.message.reply_text(f"{head}*Admins:*\n{cur}", parse_mode="Markdown")
 
 # ═══════════════════════════════════════════════════════════════════════════════
