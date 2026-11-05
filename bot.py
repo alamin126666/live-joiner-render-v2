@@ -55,6 +55,9 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+# httpx প্রতিটা request এর পুরো URL log করে — তাতে BOT_TOKEN দেখা যায়। তাই ওটা চুপ রাখা হলো।
+for _n in ("httpx", "httpcore"):
+    logging.getLogger(_n).setLevel(logging.WARNING)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -356,10 +359,10 @@ def _storage_init():
             _st_ready = True
             return
         last_err = ""
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 import pymongo
-                client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=8000, connectTimeoutMS=8000)
+                client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=6000, connectTimeoutMS=6000)
                 col = client[MONGODB_DB]["store"]
                 docs = list(col.find({}))
                 acc, adm = {}, None
@@ -389,12 +392,16 @@ def _storage_init():
                 break
             except Exception as e:
                 last_err = str(e)
-                logging.error(f"[DB] সংযোগ/পড়া ব্যর্থ ({attempt + 1}/3): {e}")
+                logging.error(f"[DB] সংযোগ/পড়া ব্যর্থ ({attempt + 1}/2): {str(e)[:300]}")
                 _db_col = None
-                time.sleep(2)
+                time.sleep(1)
         if _db_col is None:
             _db_state["mode"] = "degraded"
-            _db_state["error"] = last_err
+            _db_state["error"] = last_err[:300]
+            if "SSL handshake" in last_err or "TLSV1_ALERT" in last_err or "timed out" in last_err.lower():
+                _db_state["error"] = ("Atlas এ ঢুকতে পারছে না — Atlas > Network Access এ 0.0.0.0/0 (Allow from anywhere) "
+                                      "দিন, cluster Active কিনা দেখুন, তারপর bot restart করুন")
+                logging.critical("🚨 Atlas Network Access এ 0.0.0.0/0 নেই বলে মনে হচ্ছে (SSL handshake error)")
             logging.critical("🚨 MongoDB থেকে data পড়া যায়নি — DB তে কিছু লেখা হবে না (আগের data নিরাপদ). "
                              "MONGODB_URI / DATA_KEY / Atlas Network Access দেখে bot restart করুন")
         _st_ready = True
