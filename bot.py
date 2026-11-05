@@ -1,6 +1,10 @@
 import os
 import io
+import copy
 import json
+import base64
+import atexit
+import threading
 import time
 import html
 import re
@@ -29,9 +33,9 @@ from telethon.utils import get_peer_id
 from telethon.errors import (
     SessionPasswordNeededError, PhoneCodeInvalidError,
     PhoneCodeExpiredError, FloodWaitError,
-    UserAlreadyParticipantError
+    UserAlreadyParticipantError, UserNotParticipantError
 )
-from telethon.tl.functions.channels import JoinChannelRequest, GetFullChannelRequest
+from telethon.tl.functions.channels import JoinChannelRequest, GetFullChannelRequest, GetParticipantRequest
 from telethon.tl.functions.messages import (
     CheckChatInviteRequest, ImportChatInviteRequest, GetFullChatRequest
 )
@@ -40,7 +44,7 @@ from telethon.tl.functions.phone import (
 )
 from telethon.tl.types import (
     InputPeerSelf, UpdateGroupCallParticipants, InputPeerUser,
-    Channel, Chat as TelegramChat
+    Channel, Chat as TelegramChat, ChatInviteAlready
 )
 
 from pytgcalls import PyTgCalls
@@ -64,6 +68,11 @@ os.makedirs(DATA_DIR, exist_ok=True)
 ACCOUNTS_FILE  = os.path.join(DATA_DIR, "accounts.json")
 ADMIN_FILE     = os.path.join(DATA_DIR, "admins.json")
 SILENCE_FILE   = os.path.join(DATA_DIR, "silence.wav")
+
+# ── Database (restart/deploy এ data যাতে না হারায়) ──────────────────────────────
+MONGODB_URI    = os.environ.get("MONGODB_URI", "").strip()     # MongoDB Atlas connection string
+MONGODB_DB     = os.environ.get("MONGODB_DB", "vcjoiner").strip() or "vcjoiner"
+DATA_KEY       = os.environ.get("DATA_KEY", "").strip()        # session string encrypt করার গোপন key
 START_TIME     = time.time()
 PORT           = int(os.environ.get("PORT") or 10000)
 KEEPALIVE_INTERVAL = float(os.environ.get("KEEPALIVE_INTERVAL") or 4)
@@ -217,24 +226,183 @@ class PremiumBot(ExtBot):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STORAGE (multi-tenant per-user accounts)
+#   • MONGODB_URI থাকলে data MongoDB তে থাকে (restart এ হারায় না), session সহ সব DATA_KEY দিয়ে encrypt হয়ে।
+#   • না থাকলে আগের মতো accounts.json / admins.json (Render restart এ মুছে যেতে পারে)।
+#   • data memory তে cache থাকে; প্রতিটা save এ local file + background thread এ MongoDB update হয়।
+#   • DB থেকে data পড়তে না পারলে (বা key ভুল হলে) DB তে কিছুই লেখা হয় না — আগের data নিরাপদ থাকে।
 # ═══════════════════════════════════════════════════════════════════════════════
-def load_accounts():
-    if os.path.exists(ACCOUNTS_FILE):
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except Exception:                                            # pragma: no cover
+    Fernet = InvalidToken = None
+
+_fernet = None
+if DATA_KEY and Fernet:
+    _fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(("vcj:" + DATA_KEY).encode()).digest()))
+
+_st_lock = threading.RLock()
+_st_ready = False
+_acc_cache: dict = {}
+_admins_raw = None                       # DB/file থেকে পড়া কাঁচা admin data (load_admins parse করে)
+_db_col = None                           # MongoDB collection (None = DB বন্ধ/degraded)
+_db_state = {"mode": "file", "error": "", "pushed": {}, "last_push": 0, "writes": 0}
+_dirty = threading.Event()
+
+def _db_pack(obj) -> dict:
+    raw = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+    if _fernet:
+        return {"enc": True, "blob": _fernet.encrypt(raw.encode()).decode()}
+    return {"enc": False, "json": raw}
+
+def _db_unpack(doc: dict):
+    if doc.get("enc"):
+        if not _fernet:
+            raise RuntimeError("DB data encrypted কিন্তু DATA_KEY নেই")
         try:
-            with open(ACCOUNTS_FILE) as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                # Migrate পুরনো single-tenant format থেকে multi-tenant format
-                migrated = {}
-                for k, v in data.items():
-                    if isinstance(v, dict) and "session" in v:
-                        migrated.setdefault(str(OWNER_ID), {})[k] = v
-                    elif isinstance(v, dict):
-                        migrated[k] = v
-                return migrated
-        except Exception:
-            pass
-    return {}
+            return json.loads(_fernet.decrypt(doc["blob"].encode()).decode())
+        except InvalidToken:
+            raise RuntimeError("DATA_KEY ভুল — DB data decrypt হচ্ছে না")
+    return json.loads(doc.get("json") or "null")
+
+def _read_local(path):
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def _normalize_accounts(data) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    migrated = {}
+    for k, v in data.items():
+        if isinstance(v, dict) and "session" in v:          # পুরনো single-tenant format
+            migrated.setdefault(str(OWNER_ID), {})[k] = v
+        elif isinstance(v, dict):
+            migrated[str(k)] = v
+    return migrated
+
+def _db_snapshot():
+    with _st_lock:
+        acc = copy.deepcopy(_acc_cache)
+        if "admins" in globals():
+            adm = {str(k): copy.deepcopy(v) for k, v in list(admins.items())}   # list() = main thread এর সাথে সংঘর্ষ নেই
+        else:
+            adm = _admins_raw if isinstance(_admins_raw, dict) else {}
+    return acc, adm
+
+def _db_push() -> int:
+    """বদলানো document গুলো MongoDB তে লেখে (বদলায়নি এমনগুলো skip). return = লেখা document সংখ্যা"""
+    if _db_col is None:
+        return 0
+    acc, adm = _db_snapshot()
+    pushed, n = _db_state["pushed"], 0
+    wanted = {f"acc:{u}": a for u, a in acc.items()}
+    wanted["admins"] = adm
+    for key, obj in wanted.items():
+        h = hashlib.sha1(json.dumps(obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        if pushed.get(key) != h:
+            _db_col.replace_one({"_id": key}, {"_id": key, **_db_pack(obj), "ts": int(time.time())}, upsert=True)
+            pushed[key] = h
+            n += 1
+    for key in [k for k in pushed if k not in wanted]:        # মুছে ফেলা user
+        _db_col.delete_one({"_id": key})
+        pushed.pop(key, None)
+        n += 1
+    if n:
+        _db_state["writes"] += n
+        _db_state["last_push"] = int(time.time())
+    return n
+
+def _db_writer():
+    while True:
+        _dirty.wait()
+        time.sleep(0.3)                                       # পরপর save একসাথে করে
+        _dirty.clear()
+        try:
+            _db_push()
+            _db_state["error"] = ""
+        except Exception as e:
+            _db_state["error"] = f"push: {e}"
+            logging.error(f"[DB] লিখতে পারিনি, ৫ সেকেন্ড পরে আবার: {e}")
+            time.sleep(5)
+            _dirty.set()
+
+def _db_flush():
+    """বন্ধ হওয়ার আগে বাকি data MongoDB তে লিখে ফেলে"""
+    if _db_col is not None:
+        try:
+            _db_push()
+        except Exception as e:
+            logging.error(f"[DB] flush error: {e}")
+
+def _db_mark_dirty():
+    if _db_col is not None:
+        _dirty.set()
+
+def _storage_init():
+    global _st_ready, _acc_cache, _admins_raw, _db_col
+    with _st_lock:
+        if _st_ready:
+            return
+        local_acc = _normalize_accounts(_read_local(ACCOUNTS_FILE))
+        local_adm = _read_local(ADMIN_FILE)
+        _acc_cache, _admins_raw = local_acc, local_adm
+        if not MONGODB_URI:
+            _db_state["mode"] = "file"
+            logging.warning("⚠️ MONGODB_URI নেই — data শুধু ফাইলে (Render restart এ হারাতে পারে)")
+            _st_ready = True
+            return
+        last_err = ""
+        for attempt in range(3):
+            try:
+                import pymongo
+                client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=8000, connectTimeoutMS=8000)
+                col = client[MONGODB_DB]["store"]
+                docs = list(col.find({}))
+                acc, adm = {}, None
+                for d in docs:
+                    _id = str(d.get("_id", ""))
+                    if _id.startswith("acc:"):
+                        acc[_id[4:]] = _db_unpack(d) or {}
+                    elif _id == "admins":
+                        adm = _db_unpack(d)
+                if docs:                                       # DB ই আসল (source of truth)
+                    _acc_cache, _admins_raw = _normalize_accounts(acc), adm
+                    logging.info(f"✅ MongoDB থেকে data লোড: {len(acc)} user")
+                else:                                          # প্রথমবার: local data DB তে তুলে দেওয়া
+                    logging.info(f"🔄 MongoDB খালি — local data ({len(local_acc)} user) migrate হচ্ছে")
+                _db_col = col
+                _db_state["pushed"] = {}                       # DB তে যা আছে তার hash (আবার লেখার দরকার নেই)
+                if docs:
+                    for k, o in [(f"acc:{u}", a) for u, a in _acc_cache.items()] + [("admins", None)]:
+                        if o is not None:
+                            _db_state["pushed"][k] = hashlib.sha1(json.dumps(o, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                _db_state["mode"] = "mongodb"
+                _db_state["error"] = ""
+                threading.Thread(target=_db_writer, daemon=True, name="db-writer").start()
+                atexit.register(_db_flush)
+                if not docs:
+                    _dirty.set()                               # migrate: local data DB তে লেখা শুরু
+                break
+            except Exception as e:
+                last_err = str(e)
+                logging.error(f"[DB] সংযোগ/পড়া ব্যর্থ ({attempt + 1}/3): {e}")
+                _db_col = None
+                time.sleep(2)
+        if _db_col is None:
+            _db_state["mode"] = "degraded"
+            _db_state["error"] = last_err
+            logging.critical("🚨 MongoDB থেকে data পড়া যায়নি — DB তে কিছু লেখা হবে না (আগের data নিরাপদ). "
+                             "MONGODB_URI / DATA_KEY / Atlas Network Access দেখে bot restart করুন")
+        _st_ready = True
+
+def load_accounts():
+    _storage_init()
+    with _st_lock:
+        return copy.deepcopy(_acc_cache)
 
 def _atomic_write_json(path: str, data):
     tmp = path + ".tmp"
@@ -243,7 +411,15 @@ def _atomic_write_json(path: str, data):
     os.replace(tmp, path)
 
 def save_accounts(data):
-    _atomic_write_json(ACCOUNTS_FILE, data)
+    global _acc_cache
+    _storage_init()
+    with _st_lock:
+        _acc_cache = copy.deepcopy(data)
+    try:
+        _atomic_write_json(ACCOUNTS_FILE, data)
+    except Exception as e:
+        logging.warning(f"[FILE] accounts.json লেখা যায়নি: {e}")
+    _db_mark_dirty()
 
 def user_accounts(uid: int) -> dict:
     return load_accounts().get(str(uid), {})
@@ -256,12 +432,9 @@ def set_user_accounts(uid: int, accs: dict):
 def load_admins() -> dict:
     """admins.json -> {id: {settings, ie, type, added_by, added_at}}
     (পুরনো list format হলে auto-migrate হয়: settings=OFF, import/export=ON, NORMAL)"""
-    if not os.path.exists(ADMIN_FILE):
-        return {}
-    try:
-        with open(ADMIN_FILE) as f:
-            raw = json.load(f)
-    except Exception:
+    _storage_init()
+    raw = _admins_raw
+    if raw is None:
         return {}
     out = {}
     if isinstance(raw, list):
@@ -288,7 +461,12 @@ def load_admins() -> dict:
     return out
 
 def save_admins():
-    _atomic_write_json(ADMIN_FILE, {str(k): v for k, v in admins.items()})
+    _storage_init()
+    try:
+        _atomic_write_json(ADMIN_FILE, {str(k): v for k, v in admins.items()})
+    except Exception as e:
+        logging.warning(f"[FILE] admins.json লেখা যায়নি: {e}")
+    _db_mark_dirty()
 
 admins: dict = load_admins()
 
@@ -463,9 +641,11 @@ def loading_frame(title: str, tick: int, label: str = "Loading") -> str:
             f"{spin(tick)} <b>{mb(label)}{DOTS[tick % len(DOTS)]}</b>\n"
             f"{sweep(tick)}")
 
-async def animate(edit, render, work, interval: float = 0.9, max_frames: int = 90):
+async def animate(edit, render, work, interval: float = 0.9, max_frames: int = 90, final: bool = False):
     """work (coroutine) চলার সময় render(tick) দিয়ে message বারবার edit করে।
-    edit(text) = async callable. Flood-safe: একই text হলে edit হয় না, RetryAfter এ থামে।"""
+    edit(text) = async callable. Flood-safe: একই text হলে edit হয় না, RetryAfter এ থামে।
+    final=True হলে work শেষে render(None) দিয়ে শেষ frame (100%) দেখায় — তারপর একটু থেমে return করে,
+    যাতে পরের message 100% দেখানোর আগে চলে না আসে।"""
     task = asyncio.ensure_future(work)
     tick, last = 0, None
     try:
@@ -484,7 +664,22 @@ async def animate(edit, render, work, interval: float = 0.9, max_frames: int = 9
                 await asyncio.wait_for(asyncio.shield(task), interval)
             except asyncio.TimeoutError:
                 pass
-        return await task
+        result = await task
+        if final:
+            text = render(None)
+            for _ in range(2):
+                if text == last:
+                    break
+                try:
+                    await edit(text)
+                    last = text
+                    break
+                except RetryAfter as e:
+                    await asyncio.sleep(min(float(e.retry_after), 5))
+                except Exception:
+                    break
+            await asyncio.sleep(0.7)
+        return result
     except asyncio.CancelledError:
         task.cancel()
         raise
@@ -569,6 +764,7 @@ def _format_join_status(sd: dict, tick=None, title: str = "Joining Accounts") ->
         f"{mb('Total Bot Account')} : {total}\n"
         f"{mb('Pending Join')} : {pending}\n"
         f"{mb('Already Join')} : {sd.get('already', 0)}\n"
+        + (f"{mb('Already Member')} : {sd['skipped']}\n" if sd.get("skipped") else "") +
         f"{LINE}\n"
         f"{head}{pbar(total - pending, total, tick=tick if busy else None)}"
     )
@@ -624,6 +820,31 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     "accounts"))))
         except Exception as e:
             logging.warning(f"[MENU] {e}")
+
+async def cmd_db(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/db — শুধু owner: database এখন কেমন চলছে"""
+    uid = update.effective_user.id if update.effective_user else 0
+    if not is_owner(uid):
+        return
+    _storage_init()
+    mode = {"mongodb": "MongoDB (connected)", "file": "File only (MONGODB_URI নেই)",
+            "degraded": "DEGRADED (DB পড়া যায়নি, DB তে লেখা বন্ধ)"}[_db_state["mode"]]
+    acc = load_accounts()
+    n_acc = sum(len(v) for v in acc.values())
+    last = datetime.fromtimestamp(_db_state["last_push"]).strftime("%d %b %H:%M:%S") if _db_state["last_push"] else "—"
+    txt = (
+        f"<b>{mb('Database')}</b>\n{LINE}\n"
+        f"<b>{mb('Mode')}</b> : {html.escape(mode)}\n"
+        f"<b>{mb('Encryption')}</b> : {'ON' if _fernet else 'OFF (DATA_KEY নেই)'}\n"
+        f"<b>{mb('Users')}</b> : {len(acc)}\n"
+        f"<b>{mb('Accounts')}</b> : {n_acc}\n"
+        f"<b>{mb('Admins')}</b> : {len(admins)}\n"
+        f"<b>{mb('Last Write')}</b> : {last}\n"
+        f"<b>{mb('Writes')}</b> : {_db_state['writes']}"
+    )
+    if _db_state["error"]:
+        txt += f"\n{LINE}\n<i>{html.escape(_db_state['error'])[:300]}</i>"
+    await update.message.reply_text(txt, parse_mode="HTML")
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id if update.effective_user else 0
@@ -952,26 +1173,38 @@ async def handle_live_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: 
             parse_mode="HTML", reply_markup=get_kb(uid))
     user_flow[uid]["data"]["link"] = link
 
-    total = len(accs)
-    sd = {"total": total, "pending": total, "already": 0}
-    jt = "Joining Group For VC"
-    status_msg = await update.message.reply_text(_format_join_status(sd, 0, jt), parse_mode="HTML")
-    joined_phones = []
+    ct = f"🤖 <b>{mb('Checking Accounts')}</b>"
+    msg = await update.message.reply_text(loading_frame(ct, 0, "Checking"), parse_mode="HTML")
 
-    async def _work():
-        for phone, info in accs.items():
-            try:
-                client = await get_client(uid, phone, info.get("session", ""))
-                entity, _new = await _ensure_joined(client, link)
-                if entity:
-                    joined_phones.append(phone)
-                    sd["already"] += 1
-            except Exception as e:
-                logging.warning(f"[JOIN-GRP] {phone}: {e}")
-            sd["pending"] -= 1
+    async def edit(t):
+        await msg.edit_text(t, parse_mode="HTML")
 
-    await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
-                  lambda t: _format_join_status(sd, t, jt), _work(), interval=0.9)
+    members, others = await run_with_loading(edit, ct, _split_members(uid, accs, link), label="Checking")
+    newly = []
+    if others:                                   # animation শুধু যাদের join নেই তাদের জন্য
+        sd = {"total": len(others), "pending": len(others), "already": 0, "skipped": len(members)}
+        jt = "Joining Group For VC"
+
+        async def _work():
+            for phone in others:
+                try:
+                    client = await get_client(uid, phone, accs[phone].get("session", ""))
+                    entity, _new = await _ensure_joined(client, link)
+                    if entity:
+                        newly.append(phone)
+                        sd["already"] += 1
+                except Exception as e:
+                    logging.warning(f"[JOIN-GRP] {phone}: {e}")
+                sd["pending"] -= 1
+
+        await edit(_format_join_status(sd, 0, jt))
+        await animate(edit, lambda t: _format_join_status(sd, t, jt), _work(), interval=0.9, final=True)
+        status_msg = msg
+    else:                                        # সবাই আগে থেকেই member — কোনো join animation নেই
+        status_msg = None
+        try: await msg.delete()
+        except Exception: pass
+    joined_phones = [p for p in accs if p in members or p in newly]
 
     if not joined_phones:
         user_flow.pop(uid, None)
@@ -1089,7 +1322,7 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 sd["pending"] -= 1
 
     await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
-                  lambda t: _format_join_status(sd, t, vt), _work(), interval=0.9)
+                  lambda t: _format_join_status(sd, t, vt), _work(), interval=0.9, final=True)
 
     user_flow.pop(uid, None)
 
@@ -1131,29 +1364,50 @@ async def handle_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: i
             err_card("কোনো ব্যবহারযোগ্য account নেই", f"আগে {mb('ADD ACCOUNT')} দিয়ে account যোগ করুন"),
             parse_mode="HTML", reply_markup=get_kb(uid))
 
-    total = len(accs)
-    sd = {"total": total, "pending": total, "already": 0}
+    ct = f"🤖 <b>{mb('Checking Accounts')}</b>"
+    msg = await update.message.reply_text(loading_frame(ct, 0, "Checking"), parse_mode="HTML")
+
+    async def edit(t):
+        await msg.edit_text(t, parse_mode="HTML")
+
+    members, others = await run_with_loading(edit, ct, _split_members(uid, accs, link), label="Checking")
+    user_flow.pop(uid, None)
+
+    if not others:                               # সবাই আগে থেকেই member — animation লাগবে না
+        n = len(members)
+        return await _final_msg(
+            update, msg,
+            f"✅ <b>{mb('All Accounts Already Joined')}</b>\n{LINE}\n"
+            f"<b>{mb('Total Bot Account')}</b> : {n}\n"
+            f"<b>{mb('Already Member')}</b> : {n}\n"
+            f"{pbar(n, n)}",
+            kb=get_kb(uid))
+
+    sd = {"total": len(others), "pending": len(others), "already": 0, "skipped": len(members)}
     gt = "Joining Channel / Group"
-    status_msg = await update.message.reply_text(_format_join_status(sd, 0, gt), parse_mode="HTML")
+    failed = []
 
     async def _work():
-        for phone, info in accs.items():
+        for phone in others:
             try:
-                client = await get_client(uid, phone, info["session"])
+                client = await get_client(uid, phone, accs[phone]["session"])
                 entity, _new = await _ensure_joined(client, link)
                 if entity:
                     sd["already"] += 1
+                else:
+                    failed.append(phone)
             except Exception as e:
+                failed.append(phone)
                 logging.warning(f"[GRP] {phone}: {e}")
             sd["pending"] -= 1
 
-    await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
-                  lambda t: _format_join_status(sd, t, gt), _work(), interval=0.9)
+    await edit(_format_join_status(sd, 0, gt))
+    await animate(edit, lambda t: _format_join_status(sd, t, gt), _work(), interval=0.9, final=True)
 
-    user_flow.pop(uid, None)
+    extra = f"\n<b>{mb('Failed')}</b> : {len(failed)}" if failed else ""
     await _final_msg(
-        update, status_msg,
-        _format_join_status(sd, None, gt) + f"\n\n✅ <b>{mb('Join Completed!')}</b>",
+        update, msg,
+        _format_join_status(sd, None, gt) + extra + f"\n\n✅ <b>{mb('Join Completed!')}</b>",
         kb=get_kb(uid))
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1575,7 +1829,7 @@ async def handle_import_doc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             st["pending"] -= 1
 
     await animate(lambda t: status_msg.edit_text(t, parse_mode="HTML"),
-                  _imp_text, _work(), interval=1.0)
+                  _imp_text, _work(), interval=1.0, final=True)
     success = st["success"]
 
     await _final_msg(
@@ -1611,6 +1865,49 @@ async def do_export(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENSURE JOINED / CALL ENGINE HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
+def _invite_hash(link: str):
+    link = link.strip()
+    if "t.me/+" in link or "joinchat/" in link:
+        return (link.split("/+")[-1] if "/+" in link else link.split("joinchat/")[-1]).strip()
+    return None
+
+async def _is_member(client: TelegramClient, link: str) -> bool:
+    """account আগে থেকেই ওই channel/group এ আছে কিনা — join না করেই চেক"""
+    try:
+        h = _invite_hash(link)
+        if h:
+            return isinstance(await client(CheckChatInviteRequest(h)), ChatInviteAlready)
+        username = (link.strip().replace("https://", "").replace("http://", "")
+                    .replace("t.me/", "").replace("@", "").split("/")[0])
+        entity = await client.get_entity(username)
+        if isinstance(entity, Channel):
+            try:
+                await client(GetParticipantRequest(entity, InputPeerSelf()))
+                return True
+            except UserNotParticipantError:
+                return False
+        me = await client.get_me()                       # সাধারণ group
+        full = await client(GetFullChatRequest(entity.id))
+        return any(getattr(p, "user_id", None) == me.id
+                   for p in getattr(full.full_chat.participants, "participants", []))
+    except Exception:
+        return False        # নিশ্চিত না হলে "member না" ধরে join চেষ্টা হবে (join idempotent)
+
+async def _split_members(uid: int, accs: dict, link: str):
+    """-> (আগে থেকেই member এর phones, join লাগবে এমন phones) — accs এর order বজায় থাকে"""
+    sem = asyncio.Semaphore(4)
+
+    async def one(phone, info):
+        async with sem:
+            try:
+                client = await get_client(uid, phone, info.get("session", ""))
+                return phone, await _is_member(client, link)
+            except Exception:
+                return phone, False
+
+    res = await asyncio.gather(*[one(p, i) for p, i in accs.items()])
+    return [p for p, m in res if m], [p for p, m in res if not m]
+
 async def _ensure_joined(client: TelegramClient, link: str):
     try:
         link = link.strip()
@@ -1830,7 +2127,7 @@ async def leave_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.error(f"[LEAVE] {phone}: {e}")
 
-    await animate(lambda t: q.edit_message_text(t, parse_mode="HTML"), _render, _work(), interval=1.0)
+    await animate(lambda t: q.edit_message_text(t, parse_mode="HTML"), _render, _work(), interval=1.0, final=True)
 
     left = st_l["left"]
     live_sessions.pop(session_id, None)
@@ -2286,6 +2583,7 @@ async def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("db", cmd_db))
     app.add_handler(CommandHandler("add", cmd_add_admin))
     app.add_handler(CommandHandler("rm", cmd_rm_admin))
     app.add_handler(CommandHandler("admins", cmd_list_admins))

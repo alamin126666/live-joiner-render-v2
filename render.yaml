@@ -20,3 +20,7 @@ services:
         sync: false
       - key: KEEPALIVE_INTERVAL
         value: "4"
+      - key: MONGODB_URI
+        sync: false
+      - key: DATA_KEY
+        sync: false

@@ -112,3 +112,17 @@ panel "Link expired" dekhay — `/start` dile notun token ashe. Inline "OPEN PAN
 - Tarpor bot er admin list check kore (admin na hole 403). Admin permission (ADMIN SETTING ACCESS) server e abar check hoy.
 - Session string kokhono browser e jay na. Account id gulo opaque (HMAC), "Received" account er number masked.
 - Lent account remove kora jay na (bot er motoi). Admin shudhu nijer add kora admin remove korte pare.
+
+## Database (restart/deploy e data na harabar jonno)
+Render free plan e disk restart hole mushe jay. Tai data **MongoDB Atlas** e rakhte parben.
+Render > Environment e duto variable din:
+- `MONGODB_URI` = Atlas er connection string (`mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority`)
+- `DATA_KEY` = lomba gopon lekha (30+ okkhor). Eita diye session string **encrypt** hoye DB te thake. **Eta alada jaygay lekhe rakhun** — hariye gele DB er data khola jabe na.
+
+Kivabe kaj kore:
+- Prothom bar chalale age-r `accounts.json` / `admins.json` ja ache ta nijei DB te uthe jay (migrate). DB te data thakle DB-ii asol.
+- Prottek save e (account add/remove, admin add/remove, ityadi) background e DB update hoy. Bot restart hole DB theke ferot ashe.
+- `MONGODB_URI` na dile bot ager moto file diye cholbe.
+- DB theke data porte na parle (URI/key bhul, Atlas Network Access bondho) bot cholte thake kintu DB te **kichu lekhe na** — ager data nirapod thake. Log e `CRITICAL` dekhabe.
+- Owner `/db` dile database er obostha dekhte pabe (mode, encryption, koto user/account/admin, last write).
+- Atlas free cluster 30 din ekta connection na ashle pause hoy (bot chalu thakle hoy na); Atlas dashboard theke resume kora jay.
