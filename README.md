@@ -86,3 +86,23 @@ Bot jei Telegram account diye BotFather e banano, oi account e **Telegram Premiu
   account process hoy ar count update hoy. Edit flood-safe (same text hole edit hoy na, `RetryAfter` e auto thame).
 - Success message (login, join, admin add, import) e message effect. Effect support na korle auto effect chara jay.
 - Prompt gulote `/cancel` hint.
+
+## Mini App — ALL ACCOUNT / ALL ADMIN panel (white premium UI)
+`🗄 ALL ACCOUNT` ar `🗄 ALL ADMIN` button e click korle bot e message ashbe na — Telegram er vitorei ekta panel khule jabe.
+- Account table: search, filter (All / Live / Offline / Mine / Lent / Received), live status (progressively check hoy), page, **remove**.
+- Admin table: search, filter, flags (Settings / Import-Export / accounts given / added by), page, **remove**.
+- Import / Export panel e nei (bot e ager moto-i ache). Baki sob bot e ager moto.
+- UI shudhu white (light) theme, shudhu SVG icon (kono emoji nei), smooth animation + haptic.
+
+### Setup
+Render e `RENDER_EXTERNAL_URL` auto set thake, tai kichu korte hobe na. Custom domain hole env var din:
+`WEBAPP_URL=https://your-app.onrender.com`  (https hote hobe)
+Deploy er por bot e `/start` din — keyboard e notun button ashbe (puraton keyboard e chaple "Open Panel" button ashe).
+WEBAPP_URL / https na thakle bot ager moto message-table diye cholbe (fallback).
+
+### Security
+- Panel link browser e (ba onno keu) khulle kichui dekhabe na — shudhu "Private panel" lock screen.
+- Server prottek request e Telegram er signed `initData` (HMAC-SHA256, bot token diye) verify kore; fake/tampered/24h er purono hole 401.
+- Tarpor bot er admin list check kore (admin na hole 403). Admin permission (ADMIN SETTING ACCESS) server e abar check hoy.
+- Session string kokhono browser e jay na. Account id gulo opaque (HMAC), "Received" account er number masked.
+- Lent account remove kora jay na (bot er motoi). Admin shudhu nijer add kora admin remove korte pare.

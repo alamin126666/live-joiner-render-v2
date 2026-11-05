@@ -4,15 +4,18 @@ import json
 import time
 import html
 import re
+import hmac
+import hashlib
 import asyncio
 import logging
 import urllib.parse
 from datetime import datetime
+from urllib.parse import parse_qsl
 
 from aiohttp import web
 
 from telegram import (
-    Update, InlineKeyboardMarkup, ReplyKeyboardMarkup,
+    Update, InlineKeyboardMarkup, ReplyKeyboardMarkup, WebAppInfo,
     InlineKeyboardButton as _TgInlineButton, KeyboardButton as _TgKeyButton
 )
 from telegram.error import TelegramError, RetryAfter
@@ -66,6 +69,15 @@ PORT           = int(os.environ.get("PORT") or 10000)
 KEEPALIVE_INTERVAL = float(os.environ.get("KEEPALIVE_INTERVAL") or 4)
 PER_PAGE       = 15
 
+# Mini App (ALL ACCOUNT / ALL ADMIN panel).  Render এ RENDER_EXTERNAL_URL auto থাকে; না থাকলে WEBAPP_URL দিন।
+WEBAPP_URL     = (os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+WEBAPP_DIR     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+WEBAPP_AUTH_MAX_AGE = 24 * 3600     # initData এর বয়স এর বেশি হলে panel বন্ধ (আবার bot থেকে খুলতে হবে)
+BOT_REF = None                      # main() এ set হয় (admin এর নাম আনার জন্য)
+
+def webapp_url(tab: str):
+    return f"{WEBAPP_URL}/app?tab={tab}&v=1" if WEBAPP_URL.startswith("https://") else None
+
 # ✅ Owner username auto-detect হবে startup-এ — env var দরকার নেই
 _owner_username_cache: str | None = None
 
@@ -77,34 +89,34 @@ _owner_username_cache: str | None = None
 # নতুন emoji ব্যবহার করলে এখানে আরেকটা line যোগ করুন:  "😀": "123456789",
 # ═══════════════════════════════════════════════════════════════════════════════
 PREMIUM_EMOJI_IDS = {
-    "✅": "6267008582294705964",  # success / done title (login, code sent, join, import, admin added, left VC)
-    "❌": "6294194896349699910",  # error / cancel / failed title
-    "⚠️": "6267039884016358504",  # warning (already exists, invalid input, flood wait, expired)
-    "⛔": "5188187560035234546",  # no access / blocked account
-    "🚫": "6339344004882112151",  # Cancelled + You Not Have Any Access
-    "🟢": "5215685881989442149",  # LIVE status dot + admin ON flag + keyboard JOIN CH/GRP button
-    "🔴": "5398038979217989221",  # OFF status dot + admin OFF flag
-    "🥰": "6269181779911908635",  # /start welcome header
-    "👑": "6266995104687330978",  # Add admin summary (User Id) + cancel message
-    "🤖": "5172522439917175584",  # Join status title (Joining Accounts / Live VC / Group)
-    "📱": "5407025283456835913",  # ADD ACCOUNT prompt title
-    "🔐": "5291873529464122510",  # 2FA Password prompt title
-    "🆔": "5014902839575577394",  # Admin User ID prompt title
-    "🎥": "5389039613983602470",  # Join Live link prompt title
-    "📢": "6068631133883471225",  # Channel / Group link prompt title
-    "📦": "5472335930549347896",  # Premium admin — Your Have Accounts title
-    "🗄": "6321207771035338339",  # ALL ACCOUNT / ALL ADMIN keyboard button + ALL ACCOUNT HISTORY title
-    "🪖": "5361684864196157805",  # ALL ADMIN HISTORY title + ADMIN SETTING ACCESS button
-    "♻️": "5377584064326804458",  # BOT IMPORT & EXPORT button (admin setting)
-    "📥": "6053338928595870015",  # BOT IMPORT button + import messages
-    "📤": "5445355530111437729",  # BOT EXPORT button + export caption
-    "➕": "5397916757333654639",  # ADD ACCOUNT / ADD ADMIN keyboard button
-    "👨‍👩‍👦": "5836747361400918804",  # JOIN LIVE keyboard button
-    "🔄": "5253464392850221514",  # REFRESH button
-    "🗑️": "5445267414562389170",  # REMOVE button + Account/Admin Removed title
-    "💣": "5375445874988036618",  # LEAVE TO VC button + Leaving VC title
-    "🚨": "6267144651153609853",  # ACCESS NEED button (no access screen)
-    "📭": "5352896944496728039",  # Empty list (no account / no admin / no session)
+    "✅": "GET_PREMIUM_ID",  # success / done title (login, code sent, join, import, admin added, left VC)
+    "❌": "GET_PREMIUM_ID",  # error / cancel / failed title
+    "⚠️": "GET_PREMIUM_ID",  # warning (already exists, invalid input, flood wait, expired)
+    "⛔": "GET_PREMIUM_ID",  # no access / blocked account
+    "🚫": "GET_PREMIUM_ID",  # Cancelled + You Not Have Any Access
+    "🟢": "GET_PREMIUM_ID",  # LIVE status dot + admin ON flag + keyboard JOIN CH/GRP button
+    "🔴": "GET_PREMIUM_ID",  # OFF status dot + admin OFF flag
+    "🥰": "GET_PREMIUM_ID",  # /start welcome header
+    "👑": "GET_PREMIUM_ID",  # Add admin summary (User Id) + cancel message
+    "🤖": "GET_PREMIUM_ID",  # Join status title (Joining Accounts / Live VC / Group)
+    "📱": "GET_PREMIUM_ID",  # ADD ACCOUNT prompt title
+    "🔐": "GET_PREMIUM_ID",  # 2FA Password prompt title
+    "🆔": "GET_PREMIUM_ID",  # Admin User ID prompt title
+    "🎥": "GET_PREMIUM_ID",  # Join Live link prompt title
+    "📢": "GET_PREMIUM_ID",  # Channel / Group link prompt title
+    "📦": "GET_PREMIUM_ID",  # Premium admin — Your Have Accounts title
+    "🗄": "GET_PREMIUM_ID",  # ALL ACCOUNT / ALL ADMIN keyboard button + ALL ACCOUNT HISTORY title
+    "🪖": "GET_PREMIUM_ID",  # ALL ADMIN HISTORY title + ADMIN SETTING ACCESS button
+    "♻️": "GET_PREMIUM_ID",  # BOT IMPORT & EXPORT button (admin setting)
+    "📥": "GET_PREMIUM_ID",  # BOT IMPORT button + import messages
+    "📤": "GET_PREMIUM_ID",  # BOT EXPORT button + export caption
+    "➕": "GET_PREMIUM_ID",  # ADD ACCOUNT / ADD ADMIN keyboard button
+    "👨‍👩‍👦": "GET_PREMIUM_ID",  # JOIN LIVE keyboard button
+    "🔄": "GET_PREMIUM_ID",  # REFRESH button
+    "🗑️": "GET_PREMIUM_ID",  # REMOVE button + Account/Admin Removed title
+    "💣": "GET_PREMIUM_ID",  # LEAVE TO VC button + Leaving VC title
+    "🚨": "GET_PREMIUM_ID",  # ACCESS NEED button (no access screen)
+    "📭": "GET_PREMIUM_ID",  # Empty list (no account / no admin / no session)
 }
 
 EMOJI_MAP: dict = {k: str(v).strip() for k, v in PREMIUM_EMOJI_IDS.items()
@@ -490,12 +502,19 @@ def access_denied_kb(user_id: int) -> InlineKeyboardMarkup:
 
 def get_kb(uid: int) -> ReplyKeyboardMarkup:
     """Owner = সব button. Admin = permission অনুযায়ী (OFF হলে button-ই দেখাবে না)"""
+    def panel(label, tab):
+        # Mini App চালু থাকলে এই button চাপলেই সরাসরি panel খোলে (bot এ message আসে না)
+        u = webapp_url(tab)
+        if u:
+            return KeyboardButton(label, web_app=WebAppInfo(url=u), api_kwargs=_R)
+        return KeyboardButton(label, api_kwargs=_R)
+
     rows = [
         [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘", api_kwargs=_R), KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣", api_kwargs=_R)],
-        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R),  KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R)],
+        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R),  panel("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", "accounts")],
     ]
     if can_manage_admins(uid):
-        rows.append([KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R), KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R)])
+        rows.append([KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R), panel("🗄 𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡", "admins")])
     if can_import_export(uid):
         rows.append([KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧", api_kwargs=_R), KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧", api_kwargs=_R)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -812,24 +831,12 @@ async def show_accounts(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int
         if "not modified" not in str(e).lower():
             raise
 
-async def handle_rm_acc(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
-    try:
-        n = int(update.message.text.strip())
-    except ValueError:
-        return await update.message.reply_text("⚠️ একটি সংখ্যা দিন (list number)")
-    rows = visible_accounts(uid)
-    if not (1 <= n <= len(rows)):
-        return await update.message.reply_text(f"❌ 1 থেকে {len(rows)} এর মধ্যে দিন")
-    phone, _info, kind = rows[n - 1]
-    if kind == "lent_out":
-        return await update.message.reply_text(
-            "⛔ এই account টি admin কে দেওয়া আছে।\n"
-            "সেই admin remove না করা পর্যন্ত remove করা যাবে না।")
-    if kind == "lent_in":
-        return await update.message.reply_text(
-            "⛔ এই account টি আপনাকে দেওয়া হয়েছে — আপনি remove করতে পারবেন না।")
+async def remove_account(uid: int, phone: str) -> bool:
+    """account list থেকে মুছে session log out করে (bot + Mini App দুই জায়গা থেকেই ব্যবহার হয়)"""
     accs = user_accounts(uid)
-    info = accs.pop(phone)
+    info = accs.pop(phone, None)
+    if info is None:
+        return False
     set_user_accounts(uid, accs)
 
     key = (uid, phone)
@@ -847,6 +854,25 @@ async def handle_rm_acc(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int
             except Exception: pass
             await c.disconnect()
         except Exception: pass
+    return True
+
+async def handle_rm_acc(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
+    try:
+        n = int(update.message.text.strip())
+    except ValueError:
+        return await update.message.reply_text("⚠️ একটি সংখ্যা দিন (list number)")
+    rows = visible_accounts(uid)
+    if not (1 <= n <= len(rows)):
+        return await update.message.reply_text(f"❌ 1 থেকে {len(rows)} এর মধ্যে দিন")
+    phone, _info, kind = rows[n - 1]
+    if kind == "lent_out":
+        return await update.message.reply_text(
+            "⛔ এই account টি admin কে দেওয়া আছে।\n"
+            "সেই admin remove না করা পর্যন্ত remove করা যাবে না।")
+    if kind == "lent_in":
+        return await update.message.reply_text(
+            "⛔ এই account টি আপনাকে দেওয়া হয়েছে — আপনি remove করতে পারবেন না।")
+    await remove_account(uid, phone)
 
     user_flow.pop(uid, None)
     await update.message.reply_text(
@@ -1785,6 +1811,18 @@ async def _no_access(update: Update, uid: int):
     user_flow.pop(uid, None)
     await update.message.reply_text("⛔ <b>আপনার এই access নেই।</b>", parse_mode="HTML", reply_markup=get_kb(uid))
 
+async def _open_panel_hint(update: Update, uid: int, tab: str):
+    """পুরনো reply-keyboard এ ALL ACCOUNT/ADMIN চাপলে: Open Panel button + keyboard নতুন করে দেয়"""
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("𝗢𝗣𝗘𝗡 𝗣𝗔𝗡𝗘𝗟", web_app=WebAppInfo(url=webapp_url(tab)),
+                             api_kwargs={"style": "primary"})
+    ]])
+    await update.message.reply_text(
+        f"<b>{mb('History Panel')}</b>\n{LINE}\n<i>{mb('Tap Open Panel')}</i>",
+        parse_mode="HTML", reply_markup=kb)
+    await update.message.reply_text(f"<i>{mb('Keyboard Updated')}</i>", parse_mode="HTML",
+                                    reply_markup=get_kb(uid))
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
@@ -1797,6 +1835,8 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return await start_add_account(update, ctx)
         if "𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧" in text:
             user_flow.pop(uid, None)
+            if webapp_url("accounts"):
+                return await _open_panel_hint(update, uid, "accounts")
             return await show_accounts(update, ctx, uid, 0)
         if "𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘" in text:
             user_flow[uid] = {"state": S_WAIT_LIVE_LINK, "data": {}}
@@ -1813,6 +1853,8 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if not can_manage_admins(uid):
                 return await _no_access(update, uid)
             user_flow.pop(uid, None)
+            if webapp_url("admins"):
+                return await _open_panel_hint(update, uid, "admins")
             return await show_admins(update, ctx, uid, 0)
         if "𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧" in text:
             if not can_import_export(uid):
@@ -1933,6 +1975,211 @@ async def cmd_list_admins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"{head}*Admins:*\n{cur}", parse_mode="Markdown")
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# MINI APP  (ALL ACCOUNT / ALL ADMIN history panel)
+# শুধু Telegram এর ভেতর থেকে, bot এর signed initData দিয়ে খোলে। link browser এ খুললে কিছুই দেখাবে না।
+# ═══════════════════════════════════════════════════════════════════════════════
+def verify_init_data(raw: str):
+    """Telegram Mini App initData এর HMAC-SHA256 signature যাচাই। valid হলে user dict, নাহলে None"""
+    if not raw or len(raw) > 4096 or not BOT_TOKEN:
+        return None
+    try:
+        pairs = dict(parse_qsl(raw, keep_blank_values=True, strict_parsing=True))
+    except ValueError:
+        return None
+    got = pairs.pop("hash", None)
+    if not got:
+        return None
+    check = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+    secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    calc = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calc, got):
+        return None
+    try:
+        age = time.time() - int(pairs.get("auth_date", "0"))
+        user = json.loads(pairs.get("user", ""))
+    except (ValueError, TypeError):
+        return None
+    if age > WEBAPP_AUTH_MAX_AGE or age < -300:
+        return None
+    if not isinstance(user, dict) or not isinstance(user.get("id"), int):
+        return None
+    return user
+
+_RID_KEY = hashlib.sha256(b"rid:" + BOT_TOKEN.encode()).digest()
+
+def rid_for(uid: int, phone: str) -> str:
+    """account এর opaque id (পুরো number browser এ না পাঠিয়েও চেনার জন্য; user ভেদে আলাদা)"""
+    return hmac.new(_RID_KEY, f"{uid}:{phone}".encode(), hashlib.sha256).hexdigest()[:20]
+
+def _find_account(uid: int, rid: str):
+    for ph, info, kind in visible_accounts(uid):
+        if hmac.compare_digest(rid_for(uid, ph), str(rid)):
+            return ph, info, kind
+    return None
+
+_STATUS_SEM = asyncio.Semaphore(3)          # একসাথে বেশি Telethon connection খুললে RAM শেষ হয়
+_status_cache: dict = {}                    # sha1(session) -> (time, bool)
+
+def _active_client_for(phone: str):
+    for (u, ph), c in active_clients.items():
+        if ph == phone:
+            try:
+                if c.is_connected():
+                    return c
+            except Exception:
+                pass
+    return None
+
+async def _account_live(info: dict, phone: str, force: bool = False) -> bool:
+    sess = info.get("session", "")
+    ck = hashlib.sha1(sess.encode()).hexdigest()
+    hit = _status_cache.get(ck)
+    if hit and not force and time.time() - hit[0] < 25:
+        return hit[1]
+    async with _STATUS_SEM:
+        live, c, own = False, _active_client_for(phone), False
+        try:
+            if c is None:
+                c, own = TelegramClient(StringSession(sess), API_ID, API_HASH), True
+                await asyncio.wait_for(c.connect(), 10)
+            live = bool(await asyncio.wait_for(c.get_me(), 8))
+        except Exception:
+            live = False
+        finally:
+            if own and c is not None:
+                try: await c.disconnect()
+                except Exception: pass
+    _status_cache[ck] = (time.time(), live)
+    return live
+
+_name_cache: dict = {}                      # id -> (time, name, username)
+
+async def _tg_name(aid: int):
+    hit = _name_cache.get(aid)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1], hit[2]
+    name, uname = "", ""
+    if BOT_REF is not None:
+        try:
+            ch = await asyncio.wait_for(BOT_REF.get_chat(aid), 3)
+            name = " ".join(x for x in (ch.first_name, ch.last_name) if x).strip()
+            uname = ch.username or ""
+        except Exception:
+            pass
+    _name_cache[aid] = (time.time(), name, uname)
+    return name, uname
+
+@web.middleware
+async def webapp_mw(request: web.Request, handler):
+    if request.path.startswith("/api/"):
+        if request.method != "POST":
+            return web.json_response({"error": "method"}, status=405)
+        h = request.headers.get("Authorization", "")
+        user = verify_init_data(h[4:]) if h.startswith("tma ") else None
+        if not user:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if not is_admin_user(user["id"]):
+            return web.json_response({"error": "forbidden"}, status=403)
+        request["uid"], request["tg_user"] = user["id"], user
+    resp = await handler(request)
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return resp
+
+async def _body(request: web.Request) -> dict:
+    try:
+        d = await request.json()
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+async def web_app_page(request):
+    path = os.path.join(WEBAPP_DIR, "index.html")
+    if not os.path.exists(path):
+        return web.Response(text="panel missing", status=404)
+    with open(path, "rb") as f:
+        return web.Response(body=f.read(), content_type="text/html", charset="utf-8")
+
+async def api_me(request):
+    uid, u = request["uid"], request["tg_user"]
+    info = admins.get(uid, {})
+    role = "owner" if is_owner(uid) else ("premium" if info.get("type") == "premium" else "normal")
+    name = " ".join(x for x in (u.get("first_name"), u.get("last_name")) if x).strip() or u.get("username") or str(uid)
+    return web.json_response({"uid": uid, "name": name, "role": role, "can_manage": can_manage_admins(uid)})
+
+async def api_accounts(request):
+    uid = request["uid"]
+    rows = []
+    for ph, info, kind in visible_accounts(uid):
+        got = kind == "lent_in"
+        rows.append({
+            "rid": rid_for(uid, ph),
+            "number": mask_phone(ph) if got else ph,        # পাওয়া account এর number পুরো দেখাবে না
+            "name": "" if got else str(info.get("name", "")),
+            "added": int(info.get("added_at", 0) or 0),
+            "kind": kind,
+        })
+    return web.json_response({"rows": rows, "per_page": PER_PAGE})
+
+async def api_account_status(request):
+    uid, d = request["uid"], await _body(request)
+    hit = _find_account(uid, d.get("rid", ""))
+    if not hit:
+        return web.json_response({"error": "not_found"}, status=404)
+    ph, info, _kind = hit
+    return web.json_response({"live": await _account_live(info, ph, bool(d.get("force")))})
+
+async def api_account_remove(request):
+    uid, d = request["uid"], await _body(request)
+    hit = _find_account(uid, d.get("rid", ""))
+    if not hit:
+        return web.json_response({"error": "not_found"}, status=404)
+    ph, _info, kind = hit
+    if kind == "lent_out":
+        return web.json_response({"error": "lent_out"}, status=409)
+    if kind == "lent_in":
+        return web.json_response({"error": "lent_in"}, status=409)
+    ok = await remove_account(uid, ph)
+    return web.json_response({"ok": ok, "remaining": len(user_accounts(uid))})
+
+async def api_admins(request):
+    uid = request["uid"]
+    if not can_manage_admins(uid):
+        return web.json_response({"error": "forbidden"}, status=403)
+    items = managed_admins(uid)
+    given = lent_counts()
+    names = await asyncio.gather(*[_tg_name(a) for a in items])
+    rows = []
+    for aid, (name, uname) in zip(items, names):
+        info = admins.get(aid, {})
+        prem = info.get("type") == "premium"
+        by = info.get("added_by")
+        rows.append({
+            "id": aid, "name": name, "username": uname,
+            "type": "premium" if prem else "normal",
+            "settings": bool(info.get("settings")), "ie": bool(info.get("ie")),
+            "given": given.get(aid, 0) if prem else 0,
+            "added_by": by if (is_owner(uid) and by not in (None, OWNER_ID)) else None,
+            "added": int(info.get("added_at", 0) or 0),
+        })
+    return web.json_response({"rows": rows, "per_page": PER_PAGE})
+
+async def api_admin_remove(request):
+    uid, d = request["uid"], await _body(request)
+    if not can_manage_admins(uid):
+        return web.json_response({"error": "forbidden"}, status=403)
+    try:
+        target = int(d.get("id"))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "bad_id"}, status=400)
+    if target not in managed_admins(uid):
+        return web.json_response({"error": "not_found"}, status=404)
+    returned = await remove_admin(target, uid)
+    return web.json_response({"ok": True, "returned": returned})
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # HEALTH SERVER
 # ═══════════════════════════════════════════════════════════════════════════════
 async def health_handler(request):
@@ -1946,7 +2193,15 @@ async def ping_handler(request):
     return web.Response(text="pong", status=200)
 
 async def start_health_server():
-    app = web.Application()
+    app = web.Application(middlewares=[webapp_mw])
+    app.router.add_get("/app", web_app_page)
+    app.router.add_get("/app/", web_app_page)
+    app.router.add_post("/api/me", api_me)
+    app.router.add_post("/api/accounts", api_accounts)
+    app.router.add_post("/api/accounts/status", api_account_status)
+    app.router.add_post("/api/accounts/remove", api_account_remove)
+    app.router.add_post("/api/admins", api_admins)
+    app.router.add_post("/api/admins/remove", api_admin_remove)
     app.router.add_get("/", health_handler)
     app.router.add_get("/health", health_handler)
     app.router.add_get("/ping", ping_handler)
@@ -1963,7 +2218,7 @@ async def on_error(update, ctx: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 async def main():
-    global _owner_username_cache
+    global _owner_username_cache, BOT_REF
 
     missing = [n for n, v in (("BOT_TOKEN", BOT_TOKEN), ("API_ID", API_ID),
                               ("API_HASH", API_HASH)) if not v]
@@ -2007,6 +2262,11 @@ async def main():
         except Exception as e:
             logging.warning(f"⚠️ Owner fetch failed: {e}")
 
+        BOT_REF = app.bot
+        if webapp_url("accounts"):
+            logging.info(f"✅ Mini App panel: {WEBAPP_URL}/app")
+        else:
+            logging.warning("⚠️ Mini App বন্ধ (https WEBAPP_URL / RENDER_EXTERNAL_URL নেই) — পুরনো bot table চলবে")
         logging.info(f"✨ Premium emoji mapped: {len(EMOJI_MAP)}")
         await asyncio.sleep(1)
         await app.start()
