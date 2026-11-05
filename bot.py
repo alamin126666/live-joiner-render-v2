@@ -3,6 +3,7 @@ import io
 import json
 import time
 import html
+import re
 import asyncio
 import logging
 import urllib.parse
@@ -11,12 +12,12 @@ from datetime import datetime
 from aiohttp import web
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton
+    Update, InlineKeyboardMarkup, ReplyKeyboardMarkup,
+    InlineKeyboardButton as _TgInlineButton, KeyboardButton as _TgKeyButton
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    CallbackQueryHandler, ContextTypes, ExtBot, filters
 )
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -68,6 +69,122 @@ PER_PAGE       = 15
 _owner_username_cache: str | None = None
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# PREMIUM EMOJI  (Bot API 9.4+ — bot যে account দিয়ে বানানো, তাতে Telegram Premium থাকতে হবে)
+# নিচে প্রতিটা সাধারণ emoji এর পাশে "GET_PREMIUM_ID" এর জায়গায় premium emoji এর ID বসান।
+# "GET_PREMIUM_ID" (বা সংখ্যা ছাড়া কিছু) থাকলে ওই emoji সাধারণই থাকবে।
+# ═══════════════════════════════════════════════════════════════════════════════
+PREMIUM_EMOJI_IDS = {
+    "✅": "6226699395098745883",
+    "🟢": "6321328167558585449",
+    "🔴": "6323418085759919255",
+    "🚨": "5395695537687123235",
+    "👨‍👩‍👦": "4927046070900360103",
+    "➕": "5397916757333654639",
+    "🗄": "5262529363710060188",
+    "📥": "5443127283898405358",
+    "📤": "5445355530111437729",
+    "🤖": "5372981976804366741",
+    "🛜": "5402436682131718162",
+    "⏺": "5195287308479242646",
+    "🚫": "6264989883241076562",
+    "📮": "5287533898803211359",
+    "📌": "5397782960512444700",
+    "🥰": "5416015487525988007",
+    "❌": "6294194896349699910",
+    "📊": "6226505614764285291",
+    "📱": "5407025283456835913",
+    "👇": "6114077020361070827",
+    "⚠️": "5420323339723881652",
+    "🔄": "5253464392850221514",
+    "⏳": "6138579366403119002",
+    "🔐": "5291873529464122510",
+    "🎉": "5461151367559141950",
+    "👤": "5249053508681883137",
+    "💫": "5348181392528253881",
+    "📋": "5197269100878907942",
+    "🔒": "5296369303661067030",
+    "🎁": "6116072659735287323",
+    "🗑️": "5445267414562389170",
+    "🎥": "6334554201519031929",
+    "🎯": "5463274047771000031",
+    "✔️": "5206607081334906820",
+    "💣": "5280569974404966639",
+    "🐍": "6136567092620564683",
+    "🪖": "5357188789351490453",
+    "♻️": "5377584064326804458",
+    "👑": "6266995104687330978",
+    "💡": "6100202351849642503",
+    "⛔": "5260293700088511294",
+    "🗨️": "5316904813613556587",
+    "📦": "5472335930549347896",
+    "🎊": "5956192270213452101",
+    "📭": "5352896944496728039",
+    "👋": "5440431182602842059",
+    "✨": "6285088169817805553",
+    "◀️": "6138930810692049889",
+    "▶️": "6138500424904219564",
+}
+
+EMOJI_MAP: dict = {k: str(v).strip() for k, v in PREMIUM_EMOJI_IDS.items()
+                   if str(v).strip().isdigit()}
+_EMOJI_KEYS = sorted(EMOJI_MAP, key=len, reverse=True)
+_EMOJI_RE = re.compile("|".join(re.escape(k) for k in _EMOJI_KEYS)) if _EMOJI_KEYS else None
+
+def _emoji_tag(m) -> str:
+    e = m.group(0)
+    return f'<tg-emoji emoji-id="{EMOJI_MAP[e]}">{e}</tg-emoji>'
+
+def _split_icon(text, api_kwargs):
+    """Button text এর শুরুর emoji premium হলে সেটা button icon হয়ে যায়"""
+    api_kwargs = dict(api_kwargs or {})
+    if _EMOJI_RE and isinstance(text, str):
+        t = text.lstrip()
+        for e in _EMOJI_KEYS:
+            if t.startswith(e):
+                api_kwargs["icon_custom_emoji_id"] = EMOJI_MAP[e]
+                rest = t[len(e):].strip()
+                if rest:
+                    text = rest
+                break
+    return text, api_kwargs
+
+def InlineKeyboardButton(text, *args, api_kwargs=None, **kwargs):
+    text, api_kwargs = _split_icon(text, api_kwargs)
+    return _TgInlineButton(text, *args, api_kwargs=api_kwargs or None, **kwargs)
+
+def KeyboardButton(text, *args, api_kwargs=None, **kwargs):
+    text, api_kwargs = _split_icon(text, api_kwargs)
+    return _TgKeyButton(text, *args, api_kwargs=api_kwargs or None, **kwargs)
+
+def _premiumize(text, kwargs: dict, key: str = "parse_mode"):
+    """text এ mapped emoji থাকলে <tg-emoji> বসায় (HTML বা plain text হলে)। Markdown হলে অপরিবর্তিত।"""
+    if not (_EMOJI_RE and isinstance(text, str) and _EMOJI_RE.search(text)):
+        return text
+    pm = kwargs.get(key)
+    if isinstance(pm, str):
+        if pm.upper() != "HTML":
+            return text
+        return _EMOJI_RE.sub(_emoji_tag, text)
+    kwargs[key] = "HTML"                      # parse_mode নেই -> plain text, escape করে HTML বানাই
+    return _EMOJI_RE.sub(_emoji_tag, html.escape(text, quote=False))
+
+class PremiumBot(ExtBot):
+    async def send_message(self, chat_id, text, *args, **kwargs):
+        if not args:
+            text = _premiumize(text, kwargs)
+        return await super().send_message(chat_id, text, *args, **kwargs)
+
+    async def edit_message_text(self, text, *args, **kwargs):
+        if not args:
+            text = _premiumize(text, kwargs)
+        return await super().edit_message_text(text, *args, **kwargs)
+
+    async def send_document(self, chat_id, document, *args, **kwargs):
+        if not args and isinstance(kwargs.get("caption"), str):
+            kwargs["caption"] = _premiumize(kwargs["caption"], kwargs)
+        return await super().send_document(chat_id, document, *args, **kwargs)
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # STORAGE (multi-tenant per-user accounts)
 # ═══════════════════════════════════════════════════════════════════════════════
 def load_accounts():
@@ -105,19 +222,44 @@ def set_user_accounts(uid: int, accs: dict):
     all_data[str(uid)] = accs
     save_accounts(all_data)
 
-def load_admins():
-    if os.path.exists(ADMIN_FILE):
-        try:
-            with open(ADMIN_FILE) as f:
-                return set(int(x) for x in json.load(f))
-        except Exception:
-            return set()
-    return set()
+def load_admins() -> dict:
+    """admins.json -> {id: {settings, ie, type, added_by, added_at}}
+    (পুরনো list format হলে auto-migrate হয়: settings=OFF, import/export=ON, NORMAL)"""
+    if not os.path.exists(ADMIN_FILE):
+        return {}
+    try:
+        with open(ADMIN_FILE) as f:
+            raw = json.load(f)
+    except Exception:
+        return {}
+    out = {}
+    if isinstance(raw, list):
+        for x in raw:
+            try:
+                out[int(x)] = {"settings": False, "ie": True, "type": "normal",
+                               "added_by": OWNER_ID, "added_at": 0}
+            except (TypeError, ValueError):
+                pass
+    elif isinstance(raw, dict):
+        for k, v in raw.items():
+            try:
+                aid = int(k)
+            except (TypeError, ValueError):
+                continue
+            v = v if isinstance(v, dict) else {}
+            out[aid] = {
+                "settings": bool(v.get("settings", False)),
+                "ie": bool(v.get("ie", True)),
+                "type": "premium" if v.get("type") == "premium" else "normal",
+                "added_by": int(v.get("added_by") or OWNER_ID),
+                "added_at": int(v.get("added_at") or 0),
+            }
+    return out
 
-def save_admins(ids):
-    _atomic_write_json(ADMIN_FILE, sorted(ids))
+def save_admins():
+    _atomic_write_json(ADMIN_FILE, {str(k): v for k, v in admins.items()})
 
-admins = load_admins()
+admins: dict = load_admins()
 
 def is_owner(uid: int) -> bool:
     return uid == OWNER_ID
@@ -128,6 +270,69 @@ def is_admin_user(uid: int) -> bool:
 def is_admin(update: Update) -> bool:
     u = update.effective_user
     return bool(u and is_admin_user(u.id))
+
+# ── Admin permissions (Owner = সব access) ──────────────────────────────────
+def can_manage_admins(uid: int) -> bool:
+    """ADMIN SETTING ACCESS ON থাকলে Owner এর মতো admin add/remove করতে পারবে"""
+    return is_owner(uid) or bool(admins.get(uid, {}).get("settings"))
+
+def can_import_export(uid: int) -> bool:
+    """BOT IMPORT & EXPORT ON থাকলে import/export button + access থাকবে"""
+    return is_owner(uid) or bool(admins.get(uid, {}).get("ie"))
+
+def managed_admins(uid: int) -> list:
+    """Owner সব admin দেখবে; settings-access admin শুধু নিজের add করা admin দেখবে"""
+    if is_owner(uid):
+        return sorted(admins)
+    return sorted(a for a, info in admins.items() if info.get("added_by") == uid)
+
+# ── Account lending (Premium admin) ────────────────────────────────────────
+# Lent account এর data lender এর list এই থাকে, শুধু info["lent_to"] = admin_id বসে।
+#   lender  : সব দেখতে ও export করতে পারে, কিন্তু use/remove পারে না (admin remove না করা পর্যন্ত)
+#   receiver: শুধু use করতে পারে (number masked, remove/export নেই)
+def mask_phone(p: str) -> str:
+    if len(p) <= 7:
+        return p[:2] + "•" * max(0, len(p) - 2)
+    return p[:5] + "•" * (len(p) - 7) + p[-2:]
+
+def lent_in_accounts(uid: int) -> dict:
+    """অন্য কেউ uid কে যে account গুলো দিয়েছে"""
+    out = {}
+    for owner_id, accs in load_accounts().items():
+        if owner_id == str(uid):
+            continue
+        for ph, info in accs.items():
+            if info.get("lent_to") == uid:
+                out[ph] = info
+    return out
+
+def lent_counts() -> dict:
+    """{admin_id: কতগুলো account পেয়েছে}"""
+    out: dict = {}
+    for accs in load_accounts().values():
+        for info in accs.values():
+            t = info.get("lent_to")
+            if t:
+                out[t] = out.get(t, 0) + 1
+    return out
+
+def visible_accounts(uid: int) -> list:
+    """ALL ACCOUNT list: [(phone, info, kind)]   kind = own | lent_out | lent_in"""
+    own = user_accounts(uid)
+    rows = [(ph, info, "lent_out" if info.get("lent_to") else "own")
+            for ph, info in own.items()]
+    for ph, info in lent_in_accounts(uid).items():
+        if ph not in own:
+            rows.append((ph, info, "lent_in"))
+    return rows
+
+def usable_accounts(uid: int) -> dict:
+    """Join/VC এ যে account গুলো use করা যাবে (own + পাওয়া account; দিয়ে দেওয়া গুলো বাদ)"""
+    return {ph: info for ph, info, kind in visible_accounts(uid) if kind != "lent_out"}
+
+def lendable_phones(uid: int) -> list:
+    """যে account গুলো এখনো কাউকে দেওয়া হয়নি (Your Have Accounts)"""
+    return [ph for ph, info in user_accounts(uid).items() if not info.get("lent_to")]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STATE CACHES
@@ -140,6 +345,7 @@ live_state: dict = {}
 watchdog_tasks: dict = {}
 live_sessions: dict = {}
 user_flow: dict = {}
+admin_drafts: dict = {}   # (uid, message_id) -> add-admin draft
 
 S_WAIT_PHONE     = "wait_phone"
 S_WAIT_CODE      = "wait_code"
@@ -151,6 +357,7 @@ S_WAIT_RM_ACC    = "wait_rm_acc"
 S_WAIT_ADD_ADMIN = "wait_add_admin"
 S_WAIT_RM_ADMIN  = "wait_rm_admin"
 S_WAIT_IMPORT    = "wait_import"
+S_WAIT_ADMIN_ACCS = "wait_admin_accs"
 
 async def get_client(uid: int, phone: str, session_str: str) -> TelegramClient:
     key = (uid, phone)
@@ -172,6 +379,12 @@ async def get_client(uid: int, phone: str, session_str: str) -> TelegramClient:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Telegram Bot API 9.0+ button color — works on Telegram ≥ Feb 9 2026
 _R = {"style": "danger"}  # "danger" = red  |  "success" = green  |  "primary" = blue
+def _G(on: bool = True) -> dict:
+    return {"style": "success"} if on else _R
+
+def _yn(on: bool) -> str:
+    return "🟢" if on else "🔴"
+
 def access_denied_kb(user_id: int) -> InlineKeyboardMarkup:
     msg_text = (
         f"𝗜 𝗡𝗲𝗲𝗱 𝗩𝗰 𝗝𝗼𝗶𝗻 𝗕𝗼𝘁 𝗔𝗰𝗰𝗲𝘀𝘀.\n\n"
@@ -185,23 +398,17 @@ def access_denied_kb(user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("🚨 𝗔𝗖𝗖𝗘𝗦𝗦 𝗡𝗘𝗘𝗗", url=url, api_kwargs=_R)
     ]])
 
-def owner_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘", api_kwargs=_R), KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣", api_kwargs=_R)],
-        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R),  KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R)],
-        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R),    KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R)],
-        [KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧", api_kwargs=_R),  KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧", api_kwargs=_R)],
-    ], resize_keyboard=True)
-
-def admin_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘", api_kwargs=_R), KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣", api_kwargs=_R)],
-        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R),  KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R)],
-        [KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧", api_kwargs=_R),  KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧", api_kwargs=_R)],
-    ], resize_keyboard=True)
-
 def get_kb(uid: int) -> ReplyKeyboardMarkup:
-    return owner_kb() if is_owner(uid) else admin_kb()
+    """Owner = সব button. Admin = permission অনুযায়ী (OFF হলে button-ই দেখাবে না)"""
+    rows = [
+        [KeyboardButton("👨‍👩‍👦 𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘", api_kwargs=_R), KeyboardButton("🟢 𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣", api_kwargs=_R)],
+        [KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R),  KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗖𝗖𝗢𝗨𝗡𝗧", api_kwargs=_R)],
+    ]
+    if can_manage_admins(uid):
+        rows.append([KeyboardButton("➕ 𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R), KeyboardButton("🗄 𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡", api_kwargs=_R)])
+    if can_import_export(uid):
+        rows.append([KeyboardButton("📥 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧", api_kwargs=_R), KeyboardButton("📤 𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧", api_kwargs=_R)])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 KEYBOARD_PATTERNS = [
     "𝗝𝗢𝗜𝗡 𝗟𝗜𝗩𝗘", "𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣",
@@ -390,7 +597,7 @@ async def _check_status_quick(session_str: str) -> str:
             except Exception: pass
 
 async def show_accounts(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int = 0):
-    accs = user_accounts(uid)
+    accs = visible_accounts(uid)
     is_cb = isinstance(src, Update) and src.callback_query is not None
 
     if not accs:
@@ -401,7 +608,7 @@ async def show_accounts(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int
             await src.message.reply_text(text, parse_mode="HTML", reply_markup=get_kb(uid))
         return
 
-    items = list(accs.items())
+    items = accs
     total = len(items)
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     page = max(0, min(page, pages - 1))
@@ -409,18 +616,24 @@ async def show_accounts(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int
     page_items = items[start:start + PER_PAGE]
 
     statuses = await asyncio.gather(*[
-        _check_status_quick(info.get("session", "")) for _, info in page_items
+        _check_status_quick(info.get("session", "")) for _, info, _k in page_items
     ])
 
     lines = [f"⏺ <b>Account List Page Number : {page + 1}</b>\n"]
-    for i, ((ph, info), st) in enumerate(zip(page_items, statuses)):
+    for i, ((ph, info, kind), st) in enumerate(zip(page_items, statuses)):
         n = start + i + 1
         ts = info.get("added_at", 0)
         try:
             added = datetime.fromtimestamp(int(ts)).strftime("%d %b %Y")
         except Exception:
             added = "—"
-        lines.append(f"{n}. <code>{html.escape(ph)}</code> - {added} - {st}")
+        shown = mask_phone(ph) if kind == "lent_in" else ph     # পাওয়া account এর number পুরো দেখাবে না
+        mark = {"lent_out": " 🔒", "lent_in": " 🎁"}.get(kind, "")
+        lines.append(f"{n}. <code>{html.escape(shown)}</code> - {added} - {st}{mark}")
+    if any(k == "lent_out" for _, _, k in page_items):
+        lines.append("\n🔒 <i>Admin কে দেওয়া (use/remove বন্ধ)</i>")
+    if any(k == "lent_in" for _, _, k in page_items):
+        lines.append("\n🎁 <i>আপনাকে দেওয়া (শুধু use করা যাবে)</i>")
 
     text = "\n".join(lines)
     kb = InlineKeyboardMarkup([
@@ -442,11 +655,18 @@ async def handle_rm_acc(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int
         n = int(update.message.text.strip())
     except ValueError:
         return await update.message.reply_text("❌ একটি সংখ্যা দিন (list number)")
+    rows = visible_accounts(uid)
+    if not (1 <= n <= len(rows)):
+        return await update.message.reply_text(f"❌ 1 থেকে {len(rows)} এর মধ্যে দিন")
+    phone, _info, kind = rows[n - 1]
+    if kind == "lent_out":
+        return await update.message.reply_text(
+            "🔒 এই account টি admin কে দেওয়া আছে।\n"
+            "সেই admin remove না করা পর্যন্ত remove করা যাবে না।")
+    if kind == "lent_in":
+        return await update.message.reply_text(
+            "🔒 এই account টি আপনাকে দেওয়া হয়েছে — আপনি remove করতে পারবেন না।")
     accs = user_accounts(uid)
-    phones = list(accs.keys())
-    if not (1 <= n <= len(phones)):
-        return await update.message.reply_text(f"❌ 1 থেকে {len(phones)} এর মধ্যে দিন")
-    phone = phones[n - 1]
     info = accs.pop(phone)
     set_user_accounts(uid, accs)
 
@@ -493,7 +713,7 @@ async def ask_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def handle_live_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
     link = update.message.text.strip()
-    accs = user_accounts(uid)
+    accs = usable_accounts(uid)
     if not accs:
         user_flow.pop(uid, None)
         return await update.message.reply_text("❌ আগে অ্যাকাউন্ট যোগ করুন।",
@@ -564,7 +784,7 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     link = data["link"]
     count = data["count"]
     joined_phones = data.get("joined_phones", [])
-    accs = user_accounts(uid)
+    accs = usable_accounts(uid)
     phones = joined_phones[:count]
 
     sd = {"total": len(phones), "pending": len(phones), "already": 0}
@@ -668,7 +888,7 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 # ═══════════════════════════════════════════════════════════════════════════════
 async def handle_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
     link = update.message.text.strip()
-    accs = user_accounts(uid)
+    accs = usable_accounts(uid)
     if not accs:
         user_flow.pop(uid, None)
         return await update.message.reply_text("❌ আগে অ্যাকাউন্ট যোগ করুন।",
@@ -702,44 +922,274 @@ async def handle_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: i
 # ═══════════════════════════════════════════════════════════════════════════════
 # ADD ADMIN / ALL ADMIN
 # ═══════════════════════════════════════════════════════════════════════════════
+ADMIN_SETTING_TITLE = "𝗔𝗗𝗠𝗜𝗡 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 𝗢𝗡/𝗢𝗙𝗙 🐍"
+
+def draft_settings_kb(d: dict) -> InlineKeyboardMarkup:
+    # সব button red; ON করলে green. PREMIUM/NORMAL এর একটাই green থাকবে. NEXT সবসময় green.
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🪖 𝗔𝗗𝗠𝗜𝗡 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 𝗔𝗖𝗖𝗘𝗦𝗦", callback_data="nadm:set",
+                              api_kwargs=_G(d["settings"]))],
+        [InlineKeyboardButton("♻️ 𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧 & 𝗘𝗫𝗣𝗢𝗥𝗧", callback_data="nadm:ie",
+                              api_kwargs=_G(d["ie"]))],
+        [InlineKeyboardButton("𝗣𝗥𝗘𝗠𝗜𝗨𝗠", callback_data="nadm:prem",
+                              api_kwargs=_G(d["type"] == "premium")),
+         InlineKeyboardButton("𝗡𝗢𝗥𝗠𝗔𝗟", callback_data="nadm:norm",
+                              api_kwargs=_G(d["type"] == "normal"))],
+        [InlineKeyboardButton("𝗡𝗘𝗫𝗧", callback_data="nadm:next", api_kwargs=_G(True))],
+    ])
+
+def draft_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("𝗬𝗘𝗦", callback_data="nadm:yes", api_kwargs=_G(True)),
+        InlineKeyboardButton("𝗡𝗢𝗢", callback_data="nadm:no", api_kwargs=_R),
+    ]])
+
+def _draft_summary(d: dict) -> str:
+    return (
+        f"👑 <b>𝗨𝘀𝗲𝗿 𝗜𝗱 :</b> <code>{d['target']}</code>\n\n"
+        f"🪖 <b>𝗔𝗗𝗠𝗜𝗡 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 𝗔𝗖𝗖𝗘𝗦𝗦 :</b> {_yn(d['settings'])}\n\n"
+        f"♻️ <b>𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧 &amp; 𝗘𝗫𝗣𝗢𝗥𝗧</b> {_yn(d['ie'])}\n\n"
+        f"💡 <b>𝗔𝗗𝗠𝗜𝗡 𝗧𝗬𝗣𝗘 :</b> {'𝗣𝗥𝗘𝗠𝗜𝗨𝗠' if d['type'] == 'premium' else '𝗡𝗢𝗥𝗠𝗔𝗟'}"
+    )
+
 async def ask_add_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🆔 <b>Admin user ID দিন</b> 👇", parse_mode="HTML")
 
+async def _begin_add_admin(update: Update, uid: int, target: int):
+    """User ID পাওয়ার পর ADMIN SETTING ON/OFF message দেখায়"""
+    if target == OWNER_ID:
+        return await update.message.reply_text("⚠️ এটা owner ID।", reply_markup=get_kb(uid))
+    if target == uid or target in admins:
+        return await update.message.reply_text("⚠️ Already admin।", reply_markup=get_kb(uid))
+    d = {"target": target, "settings": False, "ie": False,
+         "type": "normal", "stage": "settings"}
+    sent = await update.message.reply_text(ADMIN_SETTING_TITLE,
+                                           reply_markup=draft_settings_kb(d))
+    admin_drafts[(uid, sent.message_id)] = d
+
 async def handle_add_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
+    if not can_manage_admins(uid):
+        user_flow.pop(uid, None)
+        return
     try:
         target = int(update.message.text.strip())
     except ValueError:
         return await update.message.reply_text("❌ Valid user ID দিন (সংখ্যা)।")
-    if target == OWNER_ID:
+    user_flow.pop(uid, None)
+    await _begin_add_admin(update, uid, target)
+
+def _create_admin(target: int, d: dict, added_by: int):
+    admins[target] = {
+        "settings": bool(d["settings"]),
+        "ie": bool(d["ie"]),
+        "type": d["type"],
+        "added_by": added_by,
+        "added_at": int(time.time()),
+    }
+    save_admins()
+
+async def _release_runtime(uid: int, phones):
+    """account হাতবদল হওয়ার আগে uid এর ওই account গুলোর live VC / client বন্ধ করে"""
+    for phone in phones:
+        key = (uid, phone)
+        _stop_watchdog(uid, phone)
+        st = live_state.pop(key, {})
+        client = active_clients.get(key)
+        for h in live_handlers.pop(key, []):
+            try:
+                if client:
+                    client.remove_event_handler(h)
+            except Exception:
+                pass
+        engine, vchat = st.get("engine"), st.get("chat_id")
+        if engine is not None and vchat is not None:
+            try: await engine.leave_call(vchat)
+            except Exception: pass
+        call_engines.pop(key, None)
+        if client:
+            try: await client.disconnect()
+            except Exception: pass
+        active_clients.pop(key, None)
+        for sid, s in list(live_sessions.items()):
+            if s["uid"] == uid and phone in s["phones"]:
+                s["phones"].remove(phone)
+                s["calls"].pop(phone, None)
+                s["engines"].pop(phone, None)
+                if not s["phones"]:
+                    live_sessions.pop(sid, None)
+
+async def admin_draft_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+    if not can_manage_admins(uid):
+        return await q.answer("⛔ আপনার এই access নেই।", show_alert=True)
+
+    key = (uid, q.message.message_id)
+    d = admin_drafts.get(key)
+    if not d:
+        await q.answer("⚠️ Request expired, আবার চেষ্টা করুন।", show_alert=True)
+        try: await q.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        return
+    action = q.data.split(":", 1)[1]
+
+    # ── Settings stage: toggle buttons ──
+    if action in ("set", "ie", "prem", "norm"):
+        if d.get("stage") != "settings":
+            return await q.answer()
+        if action == "set":
+            d["settings"] = not d["settings"]
+        elif action == "ie":
+            if not can_import_export(uid):      # নিজের যে access নেই সেটা অন্যকে দেওয়া যাবে না
+                return await q.answer("⛔ এই access আপনার নিজের নেই।", show_alert=True)
+            d["ie"] = not d["ie"]
+        elif action == "prem":
+            d["type"] = "premium"
+        else:
+            d["type"] = "normal"
+        await q.answer()
+        try: await q.edit_message_reply_markup(reply_markup=draft_settings_kb(d))
+        except Exception: pass      # same state হলে Telegram "not modified" দেয়
+        return
+
+    # ── NEXT → confirm message (আগের message মুছে নতুন message) ──
+    if action == "next":
+        if d.get("stage") != "settings":
+            return await q.answer()
+        await q.answer()
+        admin_drafts.pop(key, None)
+        try: await q.message.delete()
+        except Exception: pass
+        d["stage"] = "confirm"
+        sent = await ctx.bot.send_message(
+            q.message.chat_id,
+            _draft_summary(d) + "\n\n𝗬𝗼𝘂 𝗖𝗼𝗻𝗳𝗿𝗶𝗺 𝗔𝗱𝗱 𝗧𝗵𝗶𝘀 𝗔𝗱𝗺𝗶𝗻?",
+            parse_mode="HTML", reply_markup=draft_confirm_kb())
+        admin_drafts[(uid, sent.message_id)] = d
+        return
+
+    if d.get("stage") != "confirm":
+        return await q.answer()
+
+    # ── NOO → cancel ──
+    if action == "no":
+        admin_drafts.pop(key, None)
+        await q.answer()
+        return await q.edit_message_text(
+            f"👑 <b>𝗨𝘀𝗲𝗿 𝗜𝗱 :</b> <code>{d['target']}</code>\n\n"
+            f"🗨️ <b>𝗖𝗮𝗻𝗻𝗰𝗲𝗹 𝗔𝗱𝗱 𝗔𝗱𝗺𝗶𝗻 𝗥𝗲𝗾...</b>",
+            parse_mode="HTML")
+
+    # ── YES ──
+    if action == "yes":
+        admin_drafts.pop(key, None)
+        await q.answer()
+        target = d["target"]
+        if target == OWNER_ID or target == uid or target in admins:
+            return await q.edit_message_text("⚠️ Already admin।")
+
+        if d["type"] == "normal":                     # NORMAL: আর কিছু জিজ্ঞেস করবে না
+            _create_admin(target, d, uid)
+            return await q.edit_message_text(
+                _draft_summary(d) + "\n\n✅ <b>𝗔𝗱𝗺𝗶𝗻 𝗔𝗱𝗱𝗲𝗱 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆</b>",
+                parse_mode="HTML")
+
+        avail = len(lendable_phones(uid))             # PREMIUM: কয়টা account দেবে?
+        if avail == 0:
+            return await q.edit_message_text(
+                _draft_summary(d) + "\n\n❌ <b>আপনার কোনো available account নেই,</b>\n"
+                "তাই Premium admin add করা গেল না।",
+                parse_mode="HTML")
+        try: await q.edit_message_reply_markup(reply_markup=None)
+        except Exception: pass
+        user_flow[uid] = {"state": S_WAIT_ADMIN_ACCS, "data": {"draft": d}}
+        await ctx.bot.send_message(
+            q.message.chat_id,
+            f"𝗬𝗼𝘂𝗿 𝗛𝗮𝘃𝗲 𝗔𝗰𝗰𝗼𝘂𝗻𝘁𝘀 : {avail}\n\n"
+            f"এখন আপনি আপনার এডমিন কে কয়টি একাউন্ট দিতে চাচ্ছেন?\n"
+            f"(1-{avail})")
+        return
+
+    await q.answer()
+
+async def handle_admin_acc_count(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
+    d = user_flow[uid]["data"]["draft"]
+    target = d["target"]
+    if not can_manage_admins(uid) or target == OWNER_ID or target == uid or target in admins:
         user_flow.pop(uid, None)
-        return await update.message.reply_text("⚠️ এটা owner ID।", reply_markup=get_kb(uid))
-    if target in admins:
+        return await update.message.reply_text("⚠️ Request বাতিল হয়েছে।", reply_markup=get_kb(uid))
+    pool = lendable_phones(uid)
+    if not pool:
         user_flow.pop(uid, None)
-        return await update.message.reply_text("⚠️ Already admin।", reply_markup=get_kb(uid))
-    admins.add(target)
-    save_admins(admins)
+        return await update.message.reply_text("❌ আপনার কোনো available account নেই।",
+                                               reply_markup=get_kb(uid))
+    try:
+        n = int(update.message.text.strip())
+        if not 1 <= n <= len(pool):
+            raise ValueError
+    except (ValueError, TypeError):
+        return await update.message.reply_text(f"⚠️ 1 থেকে {len(pool)} এর মধ্যে দিন")
+
+    chosen = pool[:n]                       # এখনো কাউকে দেওয়া হয়নি এমন account থেকে
+    await _release_runtime(uid, chosen)     # দাতার চলমান VC/client থাকলে বন্ধ
+    accs = user_accounts(uid)
+    for ph in chosen:
+        accs[ph]["lent_to"] = target
+    set_user_accounts(uid, accs)
+    _create_admin(target, d, uid)
     user_flow.pop(uid, None)
     await update.message.reply_text(
-        f"✅ <b>Admin Added</b>\n\n🆔 <code>{target}</code>",
-        parse_mode="HTML", reply_markup=get_kb(uid)
-    )
+        _draft_summary(d) + "\n\n"
+        f"🎁 <b>𝗔𝗰𝗰𝗼𝘂𝗻𝘁𝘀 𝗚𝗶𝘃𝗲𝗻 :</b> {n}\n"
+        f"📦 <b>𝗬𝗼𝘂𝗿 𝗥𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴 :</b> {len(pool) - n}\n\n"
+        f"✅ <b>𝗔𝗱𝗺𝗶𝗻 𝗔𝗱𝗱𝗲𝗱 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆</b>",
+        parse_mode="HTML", reply_markup=get_kb(uid))
+
+async def remove_admin(target: int, by: int) -> int:
+    """admin remove করে; তাকে দেওয়া account গুলো দাতার কাছে ফেরত যায়। ফেরত account সংখ্যা return করে"""
+    all_data = load_accounts()
+    returned = []
+    for accs in all_data.values():
+        for ph, info in accs.items():
+            if info.get("lent_to") == target:
+                info.pop("lent_to", None)
+                returned.append(ph)
+    if returned:
+        save_accounts(all_data)
+        await _release_runtime(target, returned)   # তার চলমান VC/client বন্ধ
+    for info in admins.values():                   # তার add করা admin রা remover এর under এ যাবে
+        if info.get("added_by") == target:
+            info["added_by"] = by
+    admins.pop(target, None)
+    save_admins()
+    user_flow.pop(target, None)
+    return len(returned)
 
 async def show_admins(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int = 0):
-    if not is_owner(uid):
+    if not can_manage_admins(uid):
         return
-    items = sorted(admins)
+    items = managed_admins(uid)
     total = len(items)
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
     page = max(0, min(page, pages - 1))
     start = page * PER_PAGE
     page_items = items[start:start + PER_PAGE]
+    given = lent_counts()
 
     lines = [f"⏺ <b>Admin List Page Number : {page + 1}</b>\n"]
     if not items:
         lines.append("(কোনো admin নেই)")
     for i, aid in enumerate(page_items):
         n = start + i + 1
-        lines.append(f"{n}. <code>{aid}</code>")
+        info = admins.get(aid, {})
+        prem = info.get("type") == "premium"
+        line = (f"{n}. <code>{aid}</code> - {'PREMIUM' if prem else 'NORMAL'}"
+                f" - 🪖{_yn(info.get('settings'))} ♻️{_yn(info.get('ie'))}")
+        if prem:
+            line += f" - 🎁{given.get(aid, 0)}"
+        if is_owner(uid) and info.get("added_by") not in (None, OWNER_ID):
+            line += f" - ↳{info['added_by']}"
+        lines.append(line)
 
     text = "\n".join(lines)
     kb = InlineKeyboardMarkup([
@@ -758,21 +1208,21 @@ async def show_admins(src, ctx: ContextTypes.DEFAULT_TYPE, uid: int, page: int =
         await src.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
 
 async def handle_rm_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE, uid: int):
-    if not is_owner(uid):
+    if not can_manage_admins(uid):
         return
     try:
         n = int(update.message.text.strip())
     except ValueError:
         return await update.message.reply_text("❌ একটি সংখ্যা দিন (list number)")
-    items = sorted(admins)
+    items = managed_admins(uid)
     if not (1 <= n <= len(items)):
         return await update.message.reply_text(f"❌ 1 থেকে {len(items)} এর মধ্যে দিন")
     target = items[n - 1]
-    admins.discard(target)
-    save_admins(admins)
+    returned = await remove_admin(target, uid)
     user_flow.pop(uid, None)
+    extra = f"\n↩️ <b>Accounts Returned :</b> {returned}" if returned else ""
     await update.message.reply_text(
-        f"🗑️ <b>Admin Removed</b>\n\n🆔 <code>{target}</code>",
+        f"🗑️ <b>Admin Removed</b>\n\n🆔 <code>{target}</code>{extra}",
         parse_mode="HTML", reply_markup=get_kb(uid)
     )
 
@@ -790,7 +1240,7 @@ async def handle_import_doc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
     uid = update.effective_user.id
-    if user_flow.get(uid, {}).get("state") != S_WAIT_IMPORT:
+    if user_flow.get(uid, {}).get("state") != S_WAIT_IMPORT or not can_import_export(uid):
         return
     doc = update.message.document
     if not doc:
@@ -1080,7 +1530,7 @@ async def leave_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text("⏳ <i>Leaving VC...</i>", parse_mode="HTML")
     uid = session["uid"]
-    accs = user_accounts(uid)
+    accs = usable_accounts(uid)
     left = 0
 
     for phone in session["phones"]:
@@ -1115,6 +1565,10 @@ async def leave_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════════════════════
 # MESSAGE ROUTER
 # ═══════════════════════════════════════════════════════════════════════════════
+async def _no_access(update: Update, uid: int):
+    user_flow.pop(uid, None)
+    await update.message.reply_text("⛔ আপনার এই access নেই।", reply_markup=get_kb(uid))
+
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
@@ -1134,16 +1588,24 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if "𝗝𝗢𝗜𝗡 𝗖𝗛/𝗚𝗥𝗣" in text:
             user_flow[uid] = {"state": S_WAIT_GRP_LINK, "data": {}}
             return await ask_grp_link(update, ctx)
-        if is_owner(uid) and "𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡" in text:
+        if "𝗔𝗗𝗗 𝗔𝗗𝗠𝗜𝗡" in text:
+            if not can_manage_admins(uid):
+                return await _no_access(update, uid)
             user_flow[uid] = {"state": S_WAIT_ADD_ADMIN, "data": {}}
             return await ask_add_admin(update, ctx)
-        if is_owner(uid) and "𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡" in text:
+        if "𝗔𝗟𝗟 𝗔𝗗𝗠𝗜𝗡" in text:
+            if not can_manage_admins(uid):
+                return await _no_access(update, uid)
             user_flow.pop(uid, None)
             return await show_admins(update, ctx, uid, 0)
         if "𝗕𝗢𝗧 𝗜𝗠𝗣𝗢𝗥𝗧" in text:
+            if not can_import_export(uid):
+                return await _no_access(update, uid)
             user_flow[uid] = {"state": S_WAIT_IMPORT, "data": {}}
             return await ask_import(update, ctx)
         if "𝗕𝗢𝗧 𝗘𝗫𝗣𝗢𝗥𝗧" in text:
+            if not can_import_export(uid):
+                return await _no_access(update, uid)
             user_flow.pop(uid, None)
             return await do_export(update, ctx, uid)
 
@@ -1157,6 +1619,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if state == S_WAIT_RM_ACC:    return await handle_rm_acc(update, ctx, uid)
     if state == S_WAIT_ADD_ADMIN: return await handle_add_admin(update, ctx, uid)
     if state == S_WAIT_RM_ADMIN:  return await handle_rm_admin(update, ctx, uid)
+    if state == S_WAIT_ADMIN_ACCS: return await handle_admin_acc_count(update, ctx, uid)
 
     await update.message.reply_text("👋 Please use the buttons 👇", reply_markup=get_kb(uid))
 
@@ -1189,19 +1652,22 @@ async def callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("adm:"):
         await q.answer()
-        if not is_owner(uid): return
+        if not can_manage_admins(uid): return
         page = int(data.split(":")[1])
         return await show_admins(update, ctx, uid, page)
 
     if data.startswith("adm_rm:"):
         await q.answer()
-        if not is_owner(uid): return
+        if not can_manage_admins(uid): return
         page = int(data.split(":")[1])
         user_flow[uid] = {"state": S_WAIT_RM_ADMIN, "data": {"page": page}}
         return await q.message.reply_text(
             "🗑️ <b>কোন ID remove করবেন?</b>\n(list number দিন)",
             parse_mode="HTML"
         )
+
+    if data.startswith("nadm:"):
+        return await admin_draft_cb(update, ctx)
 
     if data.startswith("leave:"):
         return await leave_cb(update, ctx)
@@ -1212,45 +1678,43 @@ async def callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ADMIN COMMANDS
 # ═══════════════════════════════════════════════════════════════════════════════
 async def cmd_add_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id if update.effective_user else 0):
-        return await update.message.reply_text("⛔ Owner only.")
+    uid = update.effective_user.id if update.effective_user else 0
+    if not can_manage_admins(uid):
+        return await update.message.reply_text("⛔ আপনার এই access নেই।")
     if not ctx.args:
         return await update.message.reply_text("Usage: /add <user_id>")
     try:
         target = int(ctx.args[0])
     except ValueError:
         return await update.message.reply_text("❌ Invalid ID")
-    if target == OWNER_ID:
-        return await update.message.reply_text("⚠️ Owner ID")
-    if target in admins:
-        return await update.message.reply_text("⚠️ Already admin")
-    admins.add(target)
-    save_admins(admins)
-    await update.message.reply_text(f"✅ Admin added: `{target}`", parse_mode="Markdown")
+    await _begin_add_admin(update, uid, target)
 
 async def cmd_rm_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id if update.effective_user else 0):
-        return await update.message.reply_text("⛔ Owner only.")
+    uid = update.effective_user.id if update.effective_user else 0
+    if not can_manage_admins(uid):
+        return await update.message.reply_text("⛔ আপনার এই access নেই।")
+    mine = managed_admins(uid)
     if not ctx.args:
-        cur = "\n".join(f"• `{a}`" for a in sorted(admins)) or "(none)"
+        cur = "\n".join(f"• `{a}`" for a in mine) or "(none)"
         return await update.message.reply_text(
             f"Usage: /rm <user_id>\n\nAdmins:\n{cur}", parse_mode="Markdown")
     try:
         target = int(ctx.args[0])
     except ValueError:
         return await update.message.reply_text("❌ Invalid ID")
-    if target not in admins:
+    if target not in mine:
         return await update.message.reply_text("⚠️ Not admin")
-    admins.discard(target)
-    save_admins(admins)
-    await update.message.reply_text(f"🗑️ Removed: `{target}`", parse_mode="Markdown")
+    returned = await remove_admin(target, uid)
+    extra = f"\n↩️ Accounts returned: {returned}" if returned else ""
+    await update.message.reply_text(f"🗑️ Removed: `{target}`{extra}", parse_mode="Markdown")
 
 async def cmd_list_admins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
+    uid = update.effective_user.id if update.effective_user else 0
+    if not can_manage_admins(uid):
         return
-    cur = "\n".join(f"• `{a}`" for a in sorted(admins)) or "(none)"
-    await update.message.reply_text(
-        f"👑 Owner: `{OWNER_ID}`\n\n*Admins:*\n{cur}", parse_mode="Markdown")
+    cur = "\n".join(f"• `{a}`" for a in managed_admins(uid)) or "(none)"
+    head = f"👑 Owner: `{OWNER_ID}`\n\n" if is_owner(uid) else ""
+    await update.message.reply_text(f"{head}*Admins:*\n{cur}", parse_mode="Markdown")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEALTH SERVER
@@ -1295,7 +1759,7 @@ async def main():
         await asyncio.Event().wait()   # service live থাকবে, লগ দেখে ঠিক করতে পারবেন
         return
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().bot(PremiumBot(token=BOT_TOKEN)).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
@@ -1327,6 +1791,7 @@ async def main():
         except Exception as e:
             logging.warning(f"⚠️ Owner fetch failed: {e}")
 
+        logging.info(f"✨ Premium emoji mapped: {len(EMOJI_MAP)}")
         await asyncio.sleep(1)
         await app.start()
         await app.updater.start_polling(

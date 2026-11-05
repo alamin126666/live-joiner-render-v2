@@ -51,3 +51,27 @@ Render Free plan er disk **ephemeral** — restart/redeploy hole `accounts.json`
 - `/health` e uptime, notun `/ping` endpoint
 - Missing env var check + global error handler
 - Render Blueprint (`render.yaml`) + Python 3.11 pin
+
+## Notun Admin System
+**➕ ADD ADMIN** → User ID din → `ADMIN SETTING ON/OFF` message (red = OFF, green = ON, NEXT sobsomoy green):
+- 🪖 **ADMIN SETTING ACCESS** ON: oi admin Owner er moto admin add/remove korte parbe (nijer add kora admin-ei dekhbe). OFF: button o thakbe na, access o na.
+- ♻️ **BOT IMPORT & EXPORT** ON: import/export button + access. OFF: button thakbe na, access o na.
+- **NORMAL** (default) / **PREMIUM** (ekta-i green thakbe).
+- NEXT → confirm message → **YES** (green) / **NOO** (red).
+- PREMIUM + YES → "kotogula account dibe?" → number dile admin add hobe.
+
+### Premium account dewa
+- 20 ta account, 5 ta dile pool 15 hoye jay; porer admin ke dewar somoy 15 ta dekhabe.
+- Jei account ekjon pelo seta onno admin ke dewa jabe na.
+- Receiver: shudhu **use** (Join Live / Join CH/GRP) korte parbe. ALL ACCOUNT e number masked (🎁), remove/export nei. Nijer add kora account full dekhbe, remove/export korte parbe.
+- Giver: ALL ACCOUNT e sob dekhbe (🔒), export korte parbe, kintu oi account use/remove korte parbe na — jotokhon admin remove na kore.
+- Admin remove korle account gulo giver er kache ferot ashe (chalu VC thakle bondho hoy).
+- Ager `admins.json` (list format) auto-migrate hoy: settings OFF, import/export ON, NORMAL.
+- Notun permission/keyboard refresh er jonno admin ke `/start` dite hobe.
+
+## Premium Emoji (Bot API 9.4+)
+Bot jei Telegram account diye BotFather e banano, oi account e **Telegram Premium** thakte hobe.
+- `bot.py` er bhitor `PREMIUM_EMOJI_IDS` e sob normal emoji er pashe `"GET_PREMIUM_ID"` bosano ache.
+- Oi jaygay premium emoji er ID boshan (sudhu songkha). ID na boshale oi emoji normal-ই thakbe, error hoy na.
+- Message ar button duitei auto premium hoy. Button er **shurur** emoji button icon hoy.
+- Limit: inline mode ar channel e kaj kore na.
