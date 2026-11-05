@@ -100,9 +100,15 @@ Render e `RENDER_EXTERNAL_URL` auto set thake, tai kichu korte hobe na. Custom d
 Deploy er por bot e `/start` din — keyboard e notun button ashbe (puraton keyboard e chaple "Open Panel" button ashe).
 WEBAPP_URL / https na thakle bot ager moto message-table diye cholbe (fallback).
 
+### Keyboard button kivabe login hoy
+Telegram reply-keyboard button theke khulle `initData` pathay na. Tai bot prottek user er keyboard e **tar nijer signed token** URL e boshay
+(`uid + meyad + HMAC`). Token 3 din chole, ar bot jotobar keyboard pathay (prottek reply te) notun token boshe. Keyboard onek din purono hole
+panel "Link expired" dekhay — `/start` dile notun token ashe. Inline "OPEN PANEL" ar Menu button e Telegram er signed `initData` use hoy.
+
 ### Security
 - Panel link browser e (ba onno keu) khulle kichui dekhabe na — shudhu "Private panel" lock screen.
-- Server prottek request e Telegram er signed `initData` (HMAC-SHA256, bot token diye) verify kore; fake/tampered/24h er purono hole 401.
+- Server prottek request e Telegram er signed `initData` ba bot er signed keyboard-token (HMAC-SHA256, bot token theke banano key) verify kore; fake/tampered/meyad-sesh hole 401.
+- Token apnar nijer — keyboard er link kauke share korben na. Admin remove hole token thakleo access sathe sathe bondho (prottek request e admin check hoy).
 - Tarpor bot er admin list check kore (admin na hole 403). Admin permission (ADMIN SETTING ACCESS) server e abar check hoy.
 - Session string kokhono browser e jay na. Account id gulo opaque (HMAC), "Received" account er number masked.
 - Lent account remove kora jay na (bot er motoi). Admin shudhu nijer add kora admin remove korte pare.

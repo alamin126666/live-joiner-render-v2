@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl
 from aiohttp import web
 
 from telegram import (
-    Update, InlineKeyboardMarkup, ReplyKeyboardMarkup, WebAppInfo,
+    Update, InlineKeyboardMarkup, ReplyKeyboardMarkup, WebAppInfo, MenuButtonWebApp,
     InlineKeyboardButton as _TgInlineButton, KeyboardButton as _TgKeyButton
 )
 from telegram.error import TelegramError, RetryAfter
@@ -75,8 +75,37 @@ WEBAPP_DIR     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webap
 WEBAPP_AUTH_MAX_AGE = 24 * 3600     # initData এর বয়স এর বেশি হলে panel বন্ধ (আবার bot থেকে খুলতে হবে)
 BOT_REF = None                      # main() এ set হয় (admin এর নাম আনার জন্য)
 
-def webapp_url(tab: str):
-    return f"{WEBAPP_URL}/app?tab={tab}&v=1" if WEBAPP_URL.startswith("https://") else None
+# Reply-keyboard Mini App এ Telegram initData দেয় না — তাই bot প্রতিটা user এর keyboard এ তার নামে signed token বসায়।
+# token = uid + মেয়াদ + HMAC(bot token থেকে বানানো গোপন key). বদলানো/বানানো যায় না, মেয়াদ শেষ হলে বন্ধ,
+# আর প্রতি request এ admin কিনা আবার দেখা হয় (admin remove হলে সাথে সাথে access বন্ধ)।
+WEBAPP_TOKEN_TTL = 3 * 24 * 3600
+_TOK_KEY = hashlib.sha256(b"tok:" + BOT_TOKEN.encode()).digest()
+
+def make_token(uid: int) -> str:
+    exp = int(time.time()) + WEBAPP_TOKEN_TTL
+    sig = hmac.new(_TOK_KEY, f"{uid}.{exp}".encode(), hashlib.sha256).hexdigest()[:40]
+    return f"{uid}.{exp}.{sig}"
+
+def verify_token(tok: str):
+    """-> (uid, None) valid হলে; নাহলে (None, 'expired' | 'unauthorized')"""
+    try:
+        uid_s, exp_s, sig = str(tok).split(".")
+        uid, exp = int(uid_s), int(exp_s)
+    except (ValueError, TypeError):
+        return None, "unauthorized"
+    calc = hmac.new(_TOK_KEY, f"{uid}.{exp}".encode(), hashlib.sha256).hexdigest()[:40]
+    if not hmac.compare_digest(calc, sig):
+        return None, "unauthorized"
+    if exp < time.time():
+        return None, "expired"
+    return uid, None
+
+def webapp_url(tab: str, uid: int = None):
+    """uid দিলে (keyboard button) URL এ signed token থাকে; না দিলে (inline button) initData দিয়ে login হয়"""
+    if not WEBAPP_URL.startswith("https://"):
+        return None
+    u = f"{WEBAPP_URL}/app?tab={tab}&v=2"
+    return u + f"&t={make_token(uid)}" if uid else u
 
 # ✅ Owner username auto-detect হবে startup-এ — env var দরকার নেই
 _owner_username_cache: str | None = None
@@ -89,34 +118,34 @@ _owner_username_cache: str | None = None
 # নতুন emoji ব্যবহার করলে এখানে আরেকটা line যোগ করুন:  "😀": "123456789",
 # ═══════════════════════════════════════════════════════════════════════════════
 PREMIUM_EMOJI_IDS = {
-    "✅": "GET_PREMIUM_ID",  # success / done title (login, code sent, join, import, admin added, left VC)
-    "❌": "GET_PREMIUM_ID",  # error / cancel / failed title
-    "⚠️": "GET_PREMIUM_ID",  # warning (already exists, invalid input, flood wait, expired)
-    "⛔": "GET_PREMIUM_ID",  # no access / blocked account
-    "🚫": "GET_PREMIUM_ID",  # Cancelled + You Not Have Any Access
-    "🟢": "GET_PREMIUM_ID",  # LIVE status dot + admin ON flag + keyboard JOIN CH/GRP button
-    "🔴": "GET_PREMIUM_ID",  # OFF status dot + admin OFF flag
-    "🥰": "GET_PREMIUM_ID",  # /start welcome header
-    "👑": "GET_PREMIUM_ID",  # Add admin summary (User Id) + cancel message
-    "🤖": "GET_PREMIUM_ID",  # Join status title (Joining Accounts / Live VC / Group)
-    "📱": "GET_PREMIUM_ID",  # ADD ACCOUNT prompt title
-    "🔐": "GET_PREMIUM_ID",  # 2FA Password prompt title
-    "🆔": "GET_PREMIUM_ID",  # Admin User ID prompt title
-    "🎥": "GET_PREMIUM_ID",  # Join Live link prompt title
-    "📢": "GET_PREMIUM_ID",  # Channel / Group link prompt title
-    "📦": "GET_PREMIUM_ID",  # Premium admin — Your Have Accounts title
-    "🗄": "GET_PREMIUM_ID",  # ALL ACCOUNT / ALL ADMIN keyboard button + ALL ACCOUNT HISTORY title
-    "🪖": "GET_PREMIUM_ID",  # ALL ADMIN HISTORY title + ADMIN SETTING ACCESS button
-    "♻️": "GET_PREMIUM_ID",  # BOT IMPORT & EXPORT button (admin setting)
-    "📥": "GET_PREMIUM_ID",  # BOT IMPORT button + import messages
-    "📤": "GET_PREMIUM_ID",  # BOT EXPORT button + export caption
-    "➕": "GET_PREMIUM_ID",  # ADD ACCOUNT / ADD ADMIN keyboard button
-    "👨‍👩‍👦": "GET_PREMIUM_ID",  # JOIN LIVE keyboard button
-    "🔄": "GET_PREMIUM_ID",  # REFRESH button
-    "🗑️": "GET_PREMIUM_ID",  # REMOVE button + Account/Admin Removed title
-    "💣": "GET_PREMIUM_ID",  # LEAVE TO VC button + Leaving VC title
-    "🚨": "GET_PREMIUM_ID",  # ACCESS NEED button (no access screen)
-    "📭": "GET_PREMIUM_ID",  # Empty list (no account / no admin / no session)
+    "✅": "6267008582294705964",  # success / done title (login, code sent, join, import, admin added, left VC)
+    "❌": "6294194896349699910",  # error / cancel / failed title
+    "⚠️": "6267039884016358504",  # warning (already exists, invalid input, flood wait, expired)
+    "⛔": "5188187560035234546",  # no access / blocked account
+    "🚫": "6339344004882112151",  # Cancelled + You Not Have Any Access
+    "🟢": "5215685881989442149",  # LIVE status dot + admin ON flag + keyboard JOIN CH/GRP button
+    "🔴": "5398038979217989221",  # OFF status dot + admin OFF flag
+    "🥰": "6269181779911908635",  # /start welcome header
+    "👑": "6266995104687330978",  # Add admin summary (User Id) + cancel message
+    "🤖": "5172522439917175584",  # Join status title (Joining Accounts / Live VC / Group)
+    "📱": "5407025283456835913",  # ADD ACCOUNT prompt title
+    "🔐": "5291873529464122510",  # 2FA Password prompt title
+    "🆔": "5014902839575577394",  # Admin User ID prompt title
+    "🎥": "5389039613983602470",  # Join Live link prompt title
+    "📢": "6068631133883471225",  # Channel / Group link prompt title
+    "📦": "5472335930549347896",  # Premium admin — Your Have Accounts title
+    "🗄": "6321207771035338339",  # ALL ACCOUNT / ALL ADMIN keyboard button + ALL ACCOUNT HISTORY title
+    "🪖": "5361684864196157805",  # ALL ADMIN HISTORY title + ADMIN SETTING ACCESS button
+    "♻️": "5377584064326804458",  # BOT IMPORT & EXPORT button (admin setting)
+    "📥": "6053338928595870015",  # BOT IMPORT button + import messages
+    "📤": "5445355530111437729",  # BOT EXPORT button + export caption
+    "➕": "5397916757333654639",  # ADD ACCOUNT / ADD ADMIN keyboard button
+    "👨‍👩‍👦": "5836747361400918804",  # JOIN LIVE keyboard button
+    "🔄": "5253464392850221514",  # REFRESH button
+    "🗑️": "5445267414562389170",  # REMOVE button + Account/Admin Removed title
+    "💣": "5375445874988036618",  # LEAVE TO VC button + Leaving VC title
+    "🚨": "6267144651153609853",  # ACCESS NEED button (no access screen)
+    "📭": "5352896944496728039",  # Empty list (no account / no admin / no session)
 }
 
 EMOJI_MAP: dict = {k: str(v).strip() for k, v in PREMIUM_EMOJI_IDS.items()
@@ -503,8 +532,8 @@ def access_denied_kb(user_id: int) -> InlineKeyboardMarkup:
 def get_kb(uid: int) -> ReplyKeyboardMarkup:
     """Owner = সব button. Admin = permission অনুযায়ী (OFF হলে button-ই দেখাবে না)"""
     def panel(label, tab):
-        # Mini App চালু থাকলে এই button চাপলেই সরাসরি panel খোলে (bot এ message আসে না)
-        u = webapp_url(tab)
+        # keyboard button চাপলেই সরাসরি panel খোলে। Telegram এতে initData দেয় না, তাই URL এ এই user এর signed token আছে।
+        u = webapp_url(tab, uid)
         if u:
             return KeyboardButton(label, web_app=WebAppInfo(url=u), api_kwargs=_R)
         return KeyboardButton(label, api_kwargs=_R)
@@ -587,6 +616,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = f"<b>{head}</b>\n{LINE}\n" + "\n".join(rows) + f"\n{LINE}\n<b>{foot}</b>"
     await update.message.reply_text(msg, parse_mode="HTML", reply_markup=get_kb(uid),
                                     api_kwargs=dict(FX_HEART))
+    if webapp_url("accounts"):               # input এর পাশের Menu button = এক tap এ panel
+        try:
+            await ctx.bot.set_chat_menu_button(
+                chat_id=update.effective_chat.id,
+                menu_button=MenuButtonWebApp(text="Panel", web_app=WebAppInfo(url=webapp_url(
+                    "accounts"))))
+        except Exception as e:
+            logging.warning(f"[MENU] {e}")
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id if update.effective_user else 0
@@ -1811,17 +1848,24 @@ async def _no_access(update: Update, uid: int):
     user_flow.pop(uid, None)
     await update.message.reply_text("⛔ <b>আপনার এই access নেই।</b>", parse_mode="HTML", reply_markup=get_kb(uid))
 
+_panel_msgs: dict = {}      # uid -> শেষ panel message id (chat পরিষ্কার রাখতে আগেরটা মুছি)
+
 async def _open_panel_hint(update: Update, uid: int, tab: str):
-    """পুরনো reply-keyboard এ ALL ACCOUNT/ADMIN চাপলে: Open Panel button + keyboard নতুন করে দেয়"""
+    """ALL ACCOUNT / ALL ADMIN চাপলে: tapped message + আগের panel message মুছে একটা inline OPEN PANEL button পাঠায়"""
+    chat_id = update.effective_chat.id
+    for mid in (update.message.message_id, _panel_msgs.pop(uid, None)):
+        if mid:
+            try: await update.get_bot().delete_message(chat_id, mid)
+            except Exception: pass
+    title = f"🪖 <b>{mb('ALL ADMIN HISTORY')}</b>" if tab == "admins" else f"🗄 <b>{mb('ALL ACCOUNT HISTORY')}</b>"
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("𝗢𝗣𝗘𝗡 𝗣𝗔𝗡𝗘𝗟", web_app=WebAppInfo(url=webapp_url(tab)),
                              api_kwargs={"style": "primary"})
     ]])
-    await update.message.reply_text(
-        f"<b>{mb('History Panel')}</b>\n{LINE}\n<i>{mb('Tap Open Panel')}</i>",
+    sent = await update.get_bot().send_message(
+        chat_id, f"{title}\n{LINE}\n<i>{mb('Tap Below To Open')}</i>",
         parse_mode="HTML", reply_markup=kb)
-    await update.message.reply_text(f"<i>{mb('Keyboard Updated')}</i>", parse_mode="HTML",
-                                    reply_markup=get_kb(uid))
+    _panel_msgs[uid] = sent.message_id
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
@@ -2075,9 +2119,14 @@ async def webapp_mw(request: web.Request, handler):
         if request.method != "POST":
             return web.json_response({"error": "method"}, status=405)
         h = request.headers.get("Authorization", "")
-        user = verify_init_data(h[4:]) if h.startswith("tma ") else None
+        user, why = None, "unauthorized"
+        if h.startswith("tma "):                      # inline button / menu: Telegram signed initData
+            user = verify_init_data(h[4:])
+        elif h.startswith("tok "):                    # reply keyboard button: bot এর signed token
+            tuid, why = verify_token(h[4:])
+            user = {"id": tuid} if tuid else None
         if not user:
-            return web.json_response({"error": "unauthorized"}, status=401)
+            return web.json_response({"error": why}, status=401)
         if not is_admin_user(user["id"]):
             return web.json_response({"error": "forbidden"}, status=403)
         request["uid"], request["tg_user"] = user["id"], user
@@ -2106,7 +2155,10 @@ async def api_me(request):
     uid, u = request["uid"], request["tg_user"]
     info = admins.get(uid, {})
     role = "owner" if is_owner(uid) else ("premium" if info.get("type") == "premium" else "normal")
-    name = " ".join(x for x in (u.get("first_name"), u.get("last_name")) if x).strip() or u.get("username") or str(uid)
+    name = " ".join(x for x in (u.get("first_name"), u.get("last_name")) if x).strip() or u.get("username") or ""
+    if not name:
+        n, un = await _tg_name(uid)
+        name = n or (f"@{un}" if un else str(uid))
     return web.json_response({"uid": uid, "name": name, "role": role, "can_manage": can_manage_admins(uid)})
 
 async def api_accounts(request):
