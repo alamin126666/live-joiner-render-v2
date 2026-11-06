@@ -1,4 +1,5 @@
 import os
+import random
 import io
 import copy
 import json
@@ -44,8 +45,9 @@ from telethon.tl.functions.phone import (
 )
 from telethon.tl.types import (
     InputPeerSelf, UpdateGroupCallParticipants, InputPeerUser,
-    Channel, Chat as TelegramChat, ChatInviteAlready
+    Channel, Chat as TelegramChat, ChatInviteAlready, ReactionEmoji
 )
+from telethon.tl.functions.messages import GetMessagesViewsRequest, SendReactionRequest
 
 from pytgcalls import PyTgCalls
 from pytgcalls.types import GroupCallConfig
@@ -1344,6 +1346,8 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         "calls": session_calls,
         "engines": session_engines,
         "chat_id": vchat,
+        "vr": False,
+        "vr_handlers": {},
     }
 
     await _final_msg(
@@ -1353,11 +1357,145 @@ async def _do_vc_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         f"<b>𝗬𝗼𝘂𝗿 𝗧𝗮𝗿𝗴𝗲𝘁 𝗠𝗲𝗺𝗯𝗲𝗿𝘀 𝗟𝗶𝘃𝗲 𝗝𝗼𝗼𝗶𝗻....</b>\n\n"
         f"<b>{mb('Joined')}</b> : {len(session_phones)} / {count}\n"
         f"{pbar(len(session_phones), count)}",
-        kb=InlineKeyboardMarkup([[
-            InlineKeyboardButton("💣 𝗟𝗘𝗔𝗩𝗘 𝗧𝗢 𝗩𝗖",
-                                 callback_data=f"leave:{session_id}", api_kwargs=_R)
-        ]]),
+        kb=_live_kb(session_id),
     )
+
+def _live_kb(sid: str) -> InlineKeyboardMarkup:
+    on = bool(live_sessions.get(sid, {}).get("vr"))
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💣 𝗟𝗘𝗔𝗩𝗘 𝗧𝗢 𝗩𝗖", callback_data=f"leave:{sid}", api_kwargs=_R)],
+        [InlineKeyboardButton("✋ 𝗛𝗔𝗡𝗗 𝗥𝗔𝗜𝗦𝗘", callback_data=f"hand:{sid}", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("𝗩𝗜𝗘𝗪 & 𝗥𝗘𝗔𝗖𝗧𝗜𝗢𝗡", callback_data=f"vr:{sid}", api_kwargs=_G(on))],
+    ])
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HAND RAISE + VIEW & REACTION
+# ═══════════════════════════════════════════════════════════════════════════════
+POSITIVE_REACTIONS = ["👍", "❤", "🔥", "🎉", "😍", "👏", "🤩", "💯", "🥰", "🤗", "😎", "🙏", "👌",
+                      "⚡", "🏆", "💘", "😁", "🤝", "❤\u200d🔥", "🫡"]
+_allowed_cache: dict = {}
+
+async def _allowed_reactions(client: TelegramClient, peer):
+    """চ্যানেল/গ্রুপে অনুমোদিত emoji তালিকা; None = সীমা জানা যায়নি/সব চলবে"""
+    key = str(getattr(peer, "channel_id", None) or getattr(peer, "chat_id", None) or peer)
+    if key in _allowed_cache:
+        return _allowed_cache[key]
+    res = None
+    try:
+        if hasattr(peer, "channel_id"):
+            full = await client(GetFullChannelRequest(peer))
+        else:
+            full = await client(GetFullChatRequest(peer.chat_id))
+        ar = getattr(full.full_chat, "available_reactions", None)
+        some = getattr(ar, "reactions", None)
+        if some is not None:
+            res = [r.emoticon for r in some if isinstance(r, ReactionEmoji)]
+    except Exception as e:
+        logging.debug(f"[VR] allowed: {e}")
+    _allowed_cache[key] = res
+    return res
+
+async def _view_react(client: TelegramClient, peer, msg_id: int):
+    try:
+        await client(GetMessagesViewsRequest(peer=peer, id=[msg_id], increment=True))
+    except Exception as e:
+        logging.debug(f"[VR] view: {e}")
+    allowed = await _allowed_reactions(client, peer)
+    if allowed:
+        pos = [e for e in allowed if e in POSITIVE_REACTIONS]
+        rest = [e for e in allowed if e not in pos]
+        emojis = random.sample(pos, len(pos)) + random.sample(rest, len(rest))
+    else:
+        emojis = random.sample(POSITIVE_REACTIONS, len(POSITIVE_REACTIONS))
+    for em in emojis:
+        try:
+            await client(SendReactionRequest(peer=peer, msg_id=msg_id,
+                                             reaction=[ReactionEmoji(emoticon=em)]))
+            return True
+        except FloodWaitError as e:
+            await asyncio.sleep(min(e.seconds, 30))
+        except Exception as e:
+            logging.debug(f"[VR] react {em}: {e}")
+    return False
+
+async def _vr_set(session: dict, uid: int, on: bool):
+    session["vr"] = on
+    hs = session.setdefault("vr_handlers", {})
+    for phone, (client, h) in list(hs.items()):
+        try: client.remove_event_handler(h)
+        except Exception: pass
+    hs.clear()
+    if not on:
+        return
+    seen = set()
+    for phone in session["phones"]:
+        st = live_state.get((uid, phone))
+        if not st:
+            continue
+        client, chat_id = st["client"], st["chat_id"]
+
+        async def _on_post(ev, client=client, phone=phone, chat_id=chat_id):
+            if not session.get("vr"):
+                return
+            mid = ev.message.id
+            if (phone, mid) in seen:
+                return
+            seen.add((phone, mid))
+            await asyncio.sleep(random.uniform(1, 6))
+            await _view_react(client, await client.get_input_entity(chat_id), mid)
+
+        client.add_event_handler(_on_post, events.NewMessage(chats=chat_id, incoming=True))
+        hs[phone] = (client, _on_post)
+
+        async def _latest(client=client, phone=phone, chat_id=chat_id):
+            try:
+                peer = await client.get_input_entity(chat_id)
+                msgs = await client.get_messages(peer, limit=1)
+                if msgs and (phone, msgs[0].id) not in seen:
+                    seen.add((phone, msgs[0].id))
+                    await asyncio.sleep(random.uniform(0.5, 4))
+                    await _view_react(client, peer, msgs[0].id)
+            except Exception as e:
+                logging.warning(f"[VR] latest {phone}: {e}")
+        asyncio.create_task(_latest())
+
+async def vr_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not is_admin_user(q.from_user.id):
+        return await q.answer("Unauthorized", show_alert=True)
+    sid = q.data.split(":", 1)[1]
+    session = live_sessions.get(sid)
+    if not session or session["uid"] != q.from_user.id:
+        return await q.answer("Session not found", show_alert=True)
+    on = not session.get("vr")
+    await _vr_set(session, session["uid"], on)
+    await q.answer("View & Reaction ON" if on else "View & Reaction OFF")
+    try:
+        await q.edit_message_reply_markup(reply_markup=_live_kb(sid))
+    except Exception:
+        pass
+
+async def hand_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not is_admin_user(q.from_user.id):
+        return await q.answer("Unauthorized", show_alert=True)
+    sid = q.data.split(":", 1)[1]
+    session = live_sessions.get(sid)
+    if not session or session["uid"] != q.from_user.id:
+        return await q.answer("Session not found", show_alert=True)
+    uid = session["uid"]
+    ok = 0
+    for phone in session["phones"]:
+        st = live_state.get((uid, phone))
+        if not st:
+            continue
+        try:
+            await st["client"](EditGroupCallParticipantRequest(
+                call=st["call"], participant=InputPeerSelf(), raise_hand=True))
+            ok += 1
+        except Exception as e:
+            logging.warning(f"[HAND] {phone}: {e}")
+    await q.answer(f"Hand Raised : {ok} / {len(session['phones'])}", show_alert=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # JOIN CHANNEL / GROUP
@@ -1982,6 +2120,8 @@ def _register_stream_loop(engine: PyTgCalls, phone: str):
             await asyncio.sleep(2)
             await c.play(update.chat_id, _silence_stream(),
                          config=GroupCallConfig(auto_start=False))
+            try: await c.mute(update.chat_id)
+            except Exception: pass
             logging.info(f"[{phone}] 🔄 silent stream restarted")
         except Exception as e:
             logging.warning(f"[{phone}] stream replay: {e}")
@@ -2010,6 +2150,14 @@ async def _engine_join(uid: int, phone: str, engine: PyTgCalls,
         logging.warning(f"[{phone}] silent stream failed ({e})")
         await engine.play(chat_id, None,
                           config=GroupCallConfig(join_as=join_as, auto_start=False))
+    _last_mute_at.pop(me.id, None)
+    await _force_mute(engine, chat_id, client, call)
+    # join এর পর সার্ভারে participant বসতে সময় লাগে, তাই কয়েকবার mute নিশ্চিত করা হয়
+    asyncio.create_task(_remute_later(engine, chat_id, client, call))
+
+_last_mute_at: dict = {}
+
+async def _force_mute(engine, chat_id, client, call):
     try: await engine.mute(chat_id)
     except Exception: pass
     try:
@@ -2017,7 +2165,10 @@ async def _engine_join(uid: int, phone: str, engine: PyTgCalls,
             call=call, participant=InputPeerSelf(), muted=True))
     except Exception: pass
 
-_last_mute_at: dict = {}
+async def _remute_later(engine, chat_id, client, call):
+    for d in (1.5, 3, 6, 12):
+        await asyncio.sleep(d)
+        await _force_mute(engine, chat_id, client, call)
 
 def _make_remute_handler(client: TelegramClient, call, me_id: int, phone: str = None):
     async def handler(ev):
@@ -2029,7 +2180,7 @@ def _make_remute_handler(client: TelegramClient, call, me_id: int, phone: str = 
                 continue
             if not p.muted:
                 now = time.monotonic()
-                if now - _last_mute_at.get(me_id, 0) < 60:
+                if now - _last_mute_at.get(me_id, 0) < 3:
                     continue
                 _last_mute_at[me_id] = now
                 try:
@@ -2099,6 +2250,8 @@ async def leave_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     accs = usable_accounts(uid)
     phones = list(session["phones"])
     st_l = {"left": 0}
+    try: await _vr_set(session, uid, False)
+    except Exception: pass
 
     def _render(t=None):
         done = st_l["left"]
@@ -2114,6 +2267,8 @@ async def leave_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for phone in phones:
             _stop_watchdog(uid, phone)
             st = live_state.pop((uid, phone), {})
+            try: _last_mute_at.pop(st["me"].id, None)
+            except Exception: pass
             engine = st.get("engine")
             vchat = st.get("chat_id")
             call = session["calls"].get(phone)
@@ -2277,6 +2432,10 @@ async def callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("leave:"):
         return await leave_cb(update, ctx)
+    if data.startswith("hand:"):
+        return await hand_cb(update, ctx)
+    if data.startswith("vr:"):
+        return await vr_cb(update, ctx)
 
     await q.answer()
 
